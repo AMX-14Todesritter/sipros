@@ -1,0 +1,28 @@
+# Build
+build/
+bin/
+
+# Runtime / generated outputs
+results/
+output/
+*.log
+
+# Proteomics data
+*.raw
+*.RAW
+*.ft1
+*.FT1
+*.ft2
+*.FT2
+*.mzML
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

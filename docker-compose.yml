@@ -1,0 +1,9 @@
+services:
+  sipros:
+    build: .
+    image: sipros-dev
+    working_dir: /workspace/sipros
+    volumes:
+      - .:/workspace/sipros
+    stdin_open: true
+    tty: true

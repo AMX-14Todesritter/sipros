@@ -1,6 +1,8 @@
 # Build
 build/
 bin/
+tools/
+MSToolkit/lib/
 
 # Runtime / generated outputs
 results/
@@ -26,3 +28,9 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# test
+test/
+
+# data resources
+raw/

@@ -1094,12 +1094,35 @@ void MS2ScanVector::postProcessAllMs2WdpXcorr()
 	int i, iScanSize;
 	iScanSize = (int)vpAllMS2Scans.size();
 
-	postProcessAllMs2Xcorr();
-	cout << "\nXcorr search done." << endl;
+	INT64 xcorr_mem_start = checkMemoryUsage();
+    double xcorr_begin = omp_get_wtime();
 
-	postProcessAllMs2Wdp();
-	cout << "\nWDP search done.\n"
-		 << endl;
+    postProcessAllMs2Xcorr();
+
+    double xcorr_end = omp_get_wtime();
+    INT64 xcorr_mem_end = checkMemoryUsage();
+    cout << "postProcessAllMs2Xcorr() finished in "
+         << (xcorr_end - xcorr_begin) << " Seconds." << endl
+         << "Memory used: " << xcorr_mem_end << " - " << xcorr_mem_start
+         << " = " << xcorr_mem_end - xcorr_mem_start << " MB." << endl
+         << endl;
+
+    cout << "\nXcorr search done." << endl;
+
+    INT64 wdp_mem_start = checkMemoryUsage();
+    double wdp_begin = omp_get_wtime();
+
+    postProcessAllMs2Wdp();
+
+    double wdp_end = omp_get_wtime();
+    INT64 wdp_mem_end = checkMemoryUsage();
+    cout << "postProcessAllMs2Wdp() finished in "
+         << (wdp_end - wdp_begin) << " Seconds." << endl
+         << "Memory used: " << wdp_mem_end << " - " << wdp_mem_start
+         << " = " << wdp_mem_end - wdp_mem_start << " MB." << endl
+         << endl;
+
+    cout << "\nWDP search done.\n" << endl;
 
 #pragma omp parallel for schedule(guided)
 	for (i = 0; i < iScanSize; i++)

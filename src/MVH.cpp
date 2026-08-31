@@ -12,6 +12,17 @@ lnFactorialTable * MVH::lnTable = NULL;
 bitset<FragmentTypes_Size> MVH::fragmentTypes(string("0010010"));
 double MVH::ProbabilityCutOff = 0.01;
 
+static double g_mvh_calc_ions_time = 0.0;
+static double g_mvh_lookup_time = 0.0;
+static double g_mvh_probability_time = 0.0;
+static double g_mvh_total_score_time = 0.0;
+
+static long long g_mvh_score_calls = 0;
+static long long g_mvh_success_calls = 0;
+static long long g_mvh_total_theoretical_ions = 0;
+static long long g_mvh_inrange_ions = 0;
+static long long g_mvh_matched_ions = 0;
+
 MVH::MVH() {
 	// TODO Auto-generated constructor stub
 }
@@ -555,9 +566,36 @@ double MVH::lnCombin(int n, int k) {
 
 bool MVH::ScoreSequenceVsSpectrum(string & currentPeptide, int precursorCharge, MS2Scan * Spectrum, vector<double>* seqIons, vector<double> * _pdAAforward,
 		vector<double> * _pdAAreverse, double & dMvh, vector<char> * seq) {
+	//Profiling
+	double score_begin = omp_get_wtime();
+
+	#pragma omp atomic
+	g_mvh_score_calls++;
+	//profiling end
+		
+	//profiling start
+	double t0 = omp_get_wtime();
+	//ends..
+
 	if (!CalculateSequenceIons(currentPeptide, precursorCharge, bUseSmartPlusThreeModel, seqIons, _pdAAforward, _pdAAreverse, seq)) {
+		//profiling
+		double elapsed_total = omp_get_wtime() - score_begin;
+	#pragma omp atomic
+    	g_mvh_total_score_time += elapsed_total;
+		//end
+
 		return false;
 	}
+
+	//profiling
+	double elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_mvh_calc_ions_time += elapsed;
+
+	#pragma omp atomic
+	g_mvh_total_theoretical_ions += (long long)seqIons->size();
+	//ends
+
 	int totalPeaks = (int) seqIons->size();
 	char peakItr;
 	PeakList * pPeakList = Spectrum->pPeakList;
@@ -565,18 +603,46 @@ bool MVH::ScoreSequenceVsSpectrum(string & currentPeptide, int precursorCharge, 
 	mvhKey.clear();
 	mvhKey.resize(ProNovoConfig::NumIntensityClasses + 1, 0);
 
+	//profiling
+	long long local_inrange_ions = 0;
+	long long local_matched_ions = 0;
+
+	t0 = omp_get_wtime();
+	//ends
+
 	for (int j = 0; j < (int) seqIons->size(); ++j) {
 		if (seqIons->at(j) < Spectrum->mzLowerBound || seqIons->at(j) > Spectrum->mzUpperBound) {
 			--totalPeaks;
 			continue;
 		}
+		//profiling
+		local_inrange_ions++;
+		//end
+
 		peakItr = pPeakList->findNear(seqIons->at(j), ProNovoConfig::getMassAccuracyFragmentIon());
 		if (peakItr != pPeakList->end() && peakItr > 0) {
 			++(mvhKey.at(peakItr - 1));
+			local_matched_ions++;
 		} else {
 			++(mvhKey.at(ProNovoConfig::NumIntensityClasses));
 		}
 	}
+
+	//profiling 
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_mvh_lookup_time += elapsed;
+
+	#pragma omp atomic
+	g_mvh_inrange_ions += local_inrange_ions;
+
+	#pragma omp atomic
+	g_mvh_matched_ions += local_matched_ions;
+	//ends
+
+	//profiling
+	t0 = omp_get_wtime();
+	//ends
 
 	double mvh = 0.0;
 	int fragmentsUnmatched = mvhKey.back();
@@ -594,14 +660,45 @@ bool MVH::ScoreSequenceVsSpectrum(string & currentPeptide, int precursorCharge, 
 			mvh -= lnCombin(totalPeakBins, fragmentsPredicted);
 			dMvh = -mvh;
 		} else {
+			//profiling
+			elapsed = omp_get_wtime() - t0;
+			#pragma omp atomic
+			g_mvh_probability_time += elapsed;
+
+			double elapsed_total = omp_get_wtime() - score_begin;
+			#pragma omp atomic
+			g_mvh_total_score_time += elapsed_total;
+			//ends
 			return false;
 		}
 	} else {
+		//profiling
+		elapsed = omp_get_wtime() - t0;
+		#pragma omp atomic
+		g_mvh_probability_time += elapsed;
+
+		double elapsed_total = omp_get_wtime() - score_begin;
+		#pragma omp atomic
+		g_mvh_total_score_time += elapsed_total;
+		//ends
 		return false;
 	}
 	/*	if (currentPeptide == "[QITNQDSDARTLIVNNTNGNK]" && Spectrum->iScanId == 120) {
 	 cout << "check" << endl;
 	 }*/
+
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_mvh_probability_time += elapsed;
+
+	#pragma omp atomic
+	g_mvh_success_calls++;
+
+	double elapsed_total = omp_get_wtime() - score_begin;
+	#pragma omp atomic
+	g_mvh_total_score_time += elapsed_total;
+	//ends
 	return true;
 }
 
@@ -656,3 +753,32 @@ bool MVH::ScoreSequenceVsSpectrumSIP(string & currentPeptide, int precursorCharg
 	return true;
 }
 
+//profiling
+void MVH::ResetProfiling()
+{
+    g_mvh_calc_ions_time = 0.0;
+    g_mvh_lookup_time = 0.0;
+    g_mvh_probability_time = 0.0;
+    g_mvh_total_score_time = 0.0;
+
+    g_mvh_score_calls = 0;
+    g_mvh_success_calls = 0;
+    g_mvh_total_theoretical_ions = 0;
+    g_mvh_inrange_ions = 0;
+    g_mvh_matched_ions = 0;
+}
+
+void MVH::PrintProfiling()
+{
+    cout << "\n[MVH ScoreSequenceVsSpectrum profiling]" << endl
+         << "calls=" << g_mvh_score_calls << endl
+         << "success_calls=" << g_mvh_success_calls << endl
+         << "total_score_time=" << g_mvh_total_score_time << " sec" << endl
+         << "CalculateSequenceIons=" << g_mvh_calc_ions_time << " sec" << endl
+         << "lookup_loop=" << g_mvh_lookup_time << " sec" << endl
+         << "probability_calc=" << g_mvh_probability_time << " sec" << endl
+         << "total_theoretical_ions=" << g_mvh_total_theoretical_ions << endl
+         << "inrange_ions=" << g_mvh_inrange_ions << endl
+         << "matched_ions=" << g_mvh_matched_ions << endl
+         << endl;
+}

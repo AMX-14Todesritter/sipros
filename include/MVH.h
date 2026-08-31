@@ -91,6 +91,10 @@ public:
 	static bool ScoreSequenceVsSpectrumSIP(string & currentPeptide, int precursorCharge, MS2Scan * Spectrum, vector<double>* sequenceIonMasses,
 			vector<vector<double> > & vvdYionMass, vector<vector<double> > & vvdYionProb, vector<vector<double> > & vvdBionMass,
 			vector<vector<double> > & vvdBionProb, double & dMvh, vector<char> * seq);
+	
+	// profiling
+	static void ResetProfiling();
+	static void PrintProfiling();
 };
 
 #endif /* SCORES_MVH_H_ */

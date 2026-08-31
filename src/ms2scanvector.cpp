@@ -856,6 +856,8 @@ void MS2ScanVector::processPeptideArrayMvhTask(vector<Peptide *> &vpPeptideArray
 void MS2ScanVector::searchDatabaseMvh()
 {
 	CLOCKSTART;
+	//profiling
+	MVH::ResetProfiling();
 
 	ProteinDatabase myProteinDatabase(bScreenOutput);
 	vector<Peptide *> vpPeptideArray;
@@ -898,6 +900,8 @@ void MS2ScanVector::searchDatabaseMvh()
 			processPeptideArrayMvh(vpPeptideArray);
 	}
 	CLOCKSTOP;
+	//profiling
+	MVH::PrintProfiling();
 
 	this->postMvh();
 	MVH::destroyLnTable();

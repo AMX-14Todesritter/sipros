@@ -55,6 +55,38 @@ inline unsigned int checkMemoryUsage()
 	return (count / 1024);
 };
 
+inline unsigned int checkProcStatusMemoryMB(const string &targetKey)
+{
+    unsigned int count = 0;
+
+#if defined(__linux__)
+    ifstream f("/proc/self/status");
+    while (!f.eof())
+    {
+        string key;
+        f >> key;
+        if (key == targetKey)
+        {
+            f >> count;
+            break;
+        }
+    }
+    f.close();
+#endif
+
+    return (count / 1024);
+}
+
+inline unsigned int checkCurrentRSS()
+{
+    return checkProcStatusMemoryMB("VmRSS:");
+}
+
+inline unsigned int checkPeakRSS()
+{
+    return checkProcStatusMemoryMB("VmHWM:");
+}
+
 class Isotopologue;
 
 //--------------Comet Begin------------

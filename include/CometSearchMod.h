@@ -185,6 +185,9 @@ public:
 
 	static bool CalculateSP(double & fScoreSp, double* _pdAAforward, double * _pdAAreverse, MS2Scan * mstSpectrum, int iLenPeptide);
 	static double FindSpScore(Query *pQuery, int bin);
+
+	static void PrintPreprocessProfiling();
+	static void ResetPreprocessProfiling();
 };
 
 #endif /* SCORES_COMETSEARCHMOD_H_ */

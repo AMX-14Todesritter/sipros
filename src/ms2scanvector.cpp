@@ -1094,33 +1094,43 @@ void MS2ScanVector::postProcessAllMs2WdpXcorr()
 	int i, iScanSize;
 	iScanSize = (int)vpAllMS2Scans.size();
 
-	INT64 xcorr_mem_start = checkMemoryUsage();
-    double xcorr_begin = omp_get_wtime();
+	unsigned int xcorr_rss_start = checkCurrentRSS();
+	unsigned int xcorr_hwm_start = checkPeakRSS();
+	double xcorr_begin = omp_get_wtime();
 
-    postProcessAllMs2Xcorr();
+	postProcessAllMs2Xcorr();
 
-    double xcorr_end = omp_get_wtime();
-    INT64 xcorr_mem_end = checkMemoryUsage();
-    cout << "postProcessAllMs2Xcorr() finished in "
-         << (xcorr_end - xcorr_begin) << " Seconds." << endl
-         << "Memory used: " << xcorr_mem_end << " - " << xcorr_mem_start
-         << " = " << xcorr_mem_end - xcorr_mem_start << " MB." << endl
-         << endl;
+	double xcorr_end = omp_get_wtime();
+	unsigned int xcorr_rss_end = checkCurrentRSS();
+	unsigned int xcorr_hwm_end = checkPeakRSS();
+
+	cout << "\npostProcessAllMs2Xcorr() profiling:" << endl
+		<< "Time: " << (xcorr_end - xcorr_begin) << " Seconds." << endl
+		<< "RSS: " << xcorr_rss_start << " -> " << xcorr_rss_end
+		<< " MB, delta = " << (int)xcorr_rss_end - (int)xcorr_rss_start << " MB." << endl
+		<< "Peak RSS: " << xcorr_hwm_start << " -> " << xcorr_hwm_end
+		<< " MB, delta = " << (int)xcorr_hwm_end - (int)xcorr_hwm_start << " MB." << endl
+		<< endl;
 
     cout << "\nXcorr search done." << endl;
 
-    INT64 wdp_mem_start = checkMemoryUsage();
-    double wdp_begin = omp_get_wtime();
+    unsigned int mvh_rss_start = checkCurrentRSS();
+	unsigned int mvh_hwm_start = checkPeakRSS();
+	double mvh_begin = omp_get_wtime();
 
-    postProcessAllMs2Wdp();
+	postProcessAllMs2Wdp();
 
-    double wdp_end = omp_get_wtime();
-    INT64 wdp_mem_end = checkMemoryUsage();
-    cout << "postProcessAllMs2Wdp() finished in "
-         << (wdp_end - wdp_begin) << " Seconds." << endl
-         << "Memory used: " << wdp_mem_end << " - " << wdp_mem_start
-         << " = " << wdp_mem_end - wdp_mem_start << " MB." << endl
-         << endl;
+	double mvh_end = omp_get_wtime();
+	unsigned int mvh_rss_end = checkCurrentRSS();
+	unsigned int mvh_hwm_end = checkPeakRSS();
+
+	cout << "\npostProcessAllMs2Wdp() profiling:" << endl
+		<< "Time: " << (mvh_end - mvh_begin) << " Seconds." << endl
+		<< "RSS: " << mvh_rss_start << " -> " << mvh_rss_end
+		<< " MB, delta = " << (int)mvh_rss_end - (int)mvh_rss_start << " MB." << endl
+		<< "Peak RSS: " << mvh_hwm_start << " -> " << mvh_hwm_end
+		<< " MB, delta = " << (int)mvh_hwm_end - (int)mvh_hwm_start << " MB." << endl
+		<< endl;
 
     cout << "\nWDP search done.\n" << endl;
 
@@ -1154,6 +1164,11 @@ void MS2ScanVector::postProcessAllMs2MvhXcorr()
 
 void MS2ScanVector::postProcessAllMs2Wdp()
 {
+	//profiling begin
+	cout << "[WDP] enter: RSS=" << checkCurrentRSS()
+     << " MB, PeakRSS=" << checkPeakRSS() << " MB" << endl;
+	//profiling end
+
 	vector<vector<vector<double>> *> vpvvdYionMass;
 	vector<vector<vector<double>> *> vpvvdYionProb;
 	vector<vector<vector<double>> *> vpvvdBionMass;
@@ -1170,6 +1185,11 @@ void MS2ScanVector::postProcessAllMs2Wdp()
 		vpvdYionMass.push_back(new vector<double>());
 		vpvdBionMass.push_back(new vector<double>());
 	}
+
+	// profiling begin
+	cout << "[WDP] after thread buffers: RSS=" << checkCurrentRSS()
+     << " MB, PeakRSS=" << checkPeakRSS() << " MB" << endl;
+	// profiling end
 
 	int iScanSize;
 	iScanSize = (int)vpAllMS2Scans.size();
@@ -1205,6 +1225,11 @@ void MS2ScanVector::postProcessAllMs2Wdp()
 		}
 	}
 
+	// profiling begin
+	cout << "[WDP] after scoring loop: RSS=" << checkCurrentRSS()
+     << " MB, PeakRSS=" << checkPeakRSS() << " MB" << endl;
+	// profiling end
+
 	for (int i = 0; i < num_max_threads; ++i)
 	{
 		delete vpvvdYionMass.at(i);
@@ -1214,6 +1239,11 @@ void MS2ScanVector::postProcessAllMs2Wdp()
 		delete vpvdYionMass.at(i);
 		delete vpvdBionMass.at(i);
 	}
+	// profiling begin
+	cout << "[WDP] after deleting thread buffers: RSS=" << checkCurrentRSS()
+     << " MB, PeakRSS=" << checkPeakRSS() << " MB" << endl;
+	// profiling end
+
 	++PeptideUnit::iNumScores;
 }
 
@@ -1239,6 +1269,14 @@ void MS2ScanVector::postProcessAllMs2Xcorr()
 	vector<double *> v_pdAAreverse;
 	vector<unsigned int ***> v_uiBinnedIonMasses;
 	num_max_threads = omp_get_max_threads();
+
+	// thread analysis
+	vector<double> thread_preprocess_time(num_max_threads, 0.0);
+	vector<double> thread_score_time(num_max_threads, 0.0);
+	vector<int> thread_scan_count(num_max_threads, 0);
+	vector<int> thread_psm_count(num_max_threads, 0);
+	// analysis method end
+
 	for (int i = 0; i < num_max_threads; ++i)
 	{
 		vpdTmpRawData.push_back(new double[iArraySizePreprocess]());
@@ -1264,11 +1302,20 @@ void MS2ScanVector::postProcessAllMs2Xcorr()
 	int iScanSize;
 	iScanSize = (int)vpAllMS2Scans.size();
 
+// profiling for comet
+CometSearchMod::ResetPreprocessProfiling();
+
 #pragma omp parallel for schedule(guided)
 	for (int i = 0; i < iScanSize; i++)
 	{
 		int iThreadId = omp_get_thread_num();
+		thread_scan_count.at(iThreadId)++;
 		struct Query *pQuery = new Query();
+		
+		//profilling
+		double preprocess_begin = omp_get_wtime();
+		//ends here
+
 		if (!CometSearchMod::Preprocess(pQuery, vpAllMS2Scans.at(i), vpdTmpRawData.at(iThreadId),
 										vpdTmpFastXcorrData.at(iThreadId), vpdTmpCorrelationData.at(iThreadId),
 										vpdTmpSmoothedSpectrum.at(iThreadId), vpdTmpPeakExtracted.at(iThreadId)))
@@ -1278,12 +1325,22 @@ void MS2ScanVector::postProcessAllMs2Xcorr()
 		}
 		else
 		{
+			//profiling start
+			double preprocess_end = omp_get_wtime();
+        	thread_preprocess_time.at(iThreadId) += preprocess_end - preprocess_begin;
+			//profiling end
+
 			if (vpAllMS2Scans.at(i)->pQuery != NULL)
 			{
 				delete vpAllMS2Scans.at(i)->pQuery;
 				vpAllMS2Scans.at(i)->pQuery = NULL;
 			}
 			vpAllMS2Scans.at(i)->pQuery = pQuery;
+
+			//profiling start
+			double score_begin = omp_get_wtime();
+			//profiling end
+
 			for (int j = 0; j < (int)vpAllMS2Scans.at(i)->vpWeightSumTopPeptides.size(); j++)
 			{
 				double dXcorr = 0;
@@ -1291,11 +1348,54 @@ void MS2ScanVector::postProcessAllMs2Xcorr()
 											  vpbDuplFragment.at(iThreadId), v_pdAAforward.at(iThreadId), v_pdAAreverse.at(iThreadId),
 											  vpAllMS2Scans.at(i), v_uiBinnedIonMasses.at(iThreadId), dXcorr);
 				vpAllMS2Scans.at(i)->vpWeightSumTopPeptides.at(j)->vdScores[1] = dXcorr;
+				//profiling start
+				thread_psm_count.at(iThreadId)++;
+				//profiling end
 			}
+
+			//profiling start
+			 double score_end = omp_get_wtime();
+        	thread_score_time.at(iThreadId) += score_end - score_begin;
+			//profiling end
+
 			delete pQuery;
 			vpAllMS2Scans.at(i)->pQuery = NULL;
 		}
 	}
+
+	// profiling for comet
+	CometSearchMod::PrintPreprocessProfiling();
+
+	// profiling output
+	double total_preprocess_time = 0.0;
+	double total_score_time = 0.0;
+	int total_scans = 0;
+	int total_psms = 0;
+
+	cout << "\n[Xcorr thread profiling]" << endl;
+	for (int t = 0; t < num_max_threads; t++)
+	{
+		total_preprocess_time += thread_preprocess_time.at(t);
+		total_score_time += thread_score_time.at(t);
+		total_scans += thread_scan_count.at(t);
+		total_psms += thread_psm_count.at(t);
+
+		cout << "Thread " << t
+			<< ": scans=" << thread_scan_count.at(t)
+			<< ", psms=" << thread_psm_count.at(t)
+			<< ", preprocess_time=" << thread_preprocess_time.at(t)
+			<< " sec, score_time=" << thread_score_time.at(t)
+			<< " sec" << endl;
+	}
+
+	cout << "[Xcorr total worker time] preprocess=" << total_preprocess_time
+		<< " sec, scoring=" << total_score_time
+		<< " sec, scans=" << total_scans
+		<< ", psms=" << total_psms << endl;
+
+
+	
+	// profiling output end
 
 	for (int i = 0; i < num_max_threads; ++i)
 	{

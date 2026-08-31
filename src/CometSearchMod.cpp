@@ -7,6 +7,25 @@
 
 #include "CometSearchMod.h"
 
+//profiling
+static double g_xcorr_memset_time = 0.0;
+static double g_xcorr_load_ions_time = 0.0;
+static double g_xcorr_alloc_dense_time = 0.0;
+static double g_xcorr_make_corr_time = 0.0;
+static double g_xcorr_fast_window_time = 0.0;
+static double g_xcorr_fast_data_time = 0.0;
+static double g_xcorr_sparse_nl_time = 0.0;
+static double g_xcorr_sparse_time = 0.0;
+
+static long long g_xcorr_preprocess_calls = 0;
+
+static double g_xcorr_memset_raw_time = 0.0;
+static double g_xcorr_memset_fast_time = 0.0;
+static double g_xcorr_memset_corr_time = 0.0;
+static double g_xcorr_memset_smoothed_time = 0.0;
+static double g_xcorr_memset_peak_extracted_time = 0.0;
+//profiling end
+
 int CometSearchMod::iArraySizePreprocess = 0;
 int CometSearchMod::iArraySizeScore = 0;
 int CometSearchMod::iMaxPercusorCharge = 0;
@@ -34,6 +53,12 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 	int i;
 	int x;
 	int y;
+
+	//profiling
+	#pragma omp atomic
+	g_xcorr_preprocess_calls++;
+	//profiling end
+
 	// struct msdata pTmpSpData[NUM_SP_IONS];
 	struct PreprocessStruct pPre;
 	double dInverseBinWidth = 0, iMinus17 = 0, iMinus18 = 0; // dFragmentBinSize = 0;
@@ -77,17 +102,63 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 	if (iTmp > (iArraySizePreprocess * sizeof(double))) {
 		cout << "Error 2" << endl;
 	}
-	//seg debug e
+
+
+
+	//seg debug e with profiling
+	double memset_begin = omp_get_wtime();
+
+	double t0 = omp_get_wtime();
 	memset(pdTmpRawData, 0, iTmp);
+	double elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_memset_raw_time += elapsed;
+
+	t0 = omp_get_wtime();
 	memset(pdTmpFastXcorrData, 0, iTmp);
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_memset_fast_time += elapsed;
+
+	t0 = omp_get_wtime();
 	memset(pdTmpCorrelationData, 0, iTmp);
-	memset(pdTmpSmoothedSpectrum, 0, iTmp);
-	memset(pdTmpPeakExtracted, 0, iTmp);
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_memset_corr_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//memset(pdTmpSmoothedSpectrum, 0, iTmp);
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_memset_smoothed_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//memset(pdTmpPeakExtracted, 0, iTmp);
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_memset_peak_extracted_time += elapsed;
+
+	elapsed = omp_get_wtime() - memset_begin;
+	#pragma omp atomic
+	g_xcorr_memset_time += elapsed;
+
+
+	//profiling
+	t0 = omp_get_wtime();
+	//profiling end
 
 	// pdTmpRawData is a binned array holding raw data
 	if (!LoadIons(pScoring, pdTmpRawData, mstSpectrum, &pPre)) {
 		return false;
 	}
+
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_load_ions_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//profiling end
 
 	try {
 		pScoring->pfFastXcorrData = new float[pScoring->_spectrumInfoInternal.iArraySize]();
@@ -117,9 +188,23 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 		}
 	}
 
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_alloc_dense_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//profiling end
+
 	// Create data for correlation analysis.
 	// pdTmpRawData intensities are normalized to 100; pdTmpCorrelationData is windowed
 	MakeCorrData(pdTmpRawData, pdTmpCorrelationData, pScoring, &pPre);
+
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_make_corr_time += elapsed;
+	//profiling end
 
 	// Make fast xcorr spectrum.
 	double dSum = 0.0;
@@ -130,6 +215,11 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 	for (i = 0; i < ProNovoConfig::iXcorrProcessingOffset; i++) {
 		dSum += pdTmpCorrelationData[i];
 	}
+
+	//profiling
+	t0 = omp_get_wtime();
+	//profiling end
+
 	for (i = ProNovoConfig::iXcorrProcessingOffset; i < pScoring->_spectrumInfoInternal.iArraySize + ProNovoConfig::iXcorrProcessingOffset; i++) {
 		if (i < pScoring->_spectrumInfoInternal.iArraySize) {
 			dSum += pdTmpCorrelationData[i];
@@ -145,7 +235,18 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 		pdTmpFastXcorrData[i - ProNovoConfig::iXcorrProcessingOffset] = (dSum - pdTmpCorrelationData[i - ProNovoConfig::iXcorrProcessingOffset]) * dTmp;
 	}
 
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_fast_window_time += elapsed;
+	//profiling end
+
 	pScoring->pfFastXcorrData[0] = 0.0;
+
+	//profiling
+	t0 = omp_get_wtime();
+	//profiling end
+
 	for (i = 1; i < pScoring->_spectrumInfoInternal.iArraySize; i++) {
 		double dTmp = pdTmpCorrelationData[i] - pdTmpFastXcorrData[i];
 
@@ -183,6 +284,14 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 
 		}
 	}
+
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_fast_data_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//profiling end
 
 	/*ofstream outputFile;
 	 string sOutputFile = "pScoring->pfFastXcorrDataNL.txt";
@@ -256,6 +365,14 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 
 	}
 
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_sparse_nl_time += elapsed;
+
+	t0 = omp_get_wtime();
+	//profiling end
+
 	pScoring->iFastXcorrData = pScoring->_spectrumInfoInternal.iArraySize / SPARSE_MATRIX_SIZE + 1;
 
 	//MH: Fill sparse matrix
@@ -309,6 +426,13 @@ bool CometSearchMod::Preprocess(struct Query *pScoring, MS2Scan * mstSpectrum, d
 	}
 
 	delete[] pScoring->pfFastXcorrData;
+
+	//profiling
+	elapsed = omp_get_wtime() - t0;
+	#pragma omp atomic
+	g_xcorr_sparse_time += elapsed;
+	//profiling end
+	
 	pScoring->pfFastXcorrData = NULL;
 
 	return true;
@@ -1257,4 +1381,46 @@ double CometSearchMod::FindSpScore(Query *pQuery, int bin) {
 		return 0.0f;
 	int y = bin - (x * SPARSE_MATRIX_SIZE);
 	return pQuery->ppfSparseSpScoreData[x][y];
+}
+
+
+//profiling print methods
+
+void CometSearchMod::ResetPreprocessProfiling()
+{
+    g_xcorr_memset_time = 0.0;
+    g_xcorr_load_ions_time = 0.0;
+    g_xcorr_alloc_dense_time = 0.0;
+    g_xcorr_make_corr_time = 0.0;
+    g_xcorr_fast_window_time = 0.0;
+    g_xcorr_fast_data_time = 0.0;
+    g_xcorr_sparse_nl_time = 0.0;
+    g_xcorr_sparse_time = 0.0;
+    g_xcorr_preprocess_calls = 0;
+
+	g_xcorr_memset_raw_time = 0.0;
+	g_xcorr_memset_fast_time = 0.0;
+	g_xcorr_memset_corr_time = 0.0;
+	g_xcorr_memset_smoothed_time = 0.0;
+	g_xcorr_memset_peak_extracted_time = 0.0;
+}
+
+void CometSearchMod::PrintPreprocessProfiling()
+{
+    cout << "\n[Xcorr preprocess breakdown]" << endl
+         << "calls=" << g_xcorr_preprocess_calls << endl
+         << "memset=" << g_xcorr_memset_time << " sec" << endl
+         << "  memset raw data=" << g_xcorr_memset_raw_time << " sec" << endl
+         << "  memset fast xcorr data=" << g_xcorr_memset_fast_time << " sec" << endl
+         << "  memset correlation data=" << g_xcorr_memset_corr_time << " sec" << endl
+         << "  memset smoothed spectrum=" << g_xcorr_memset_smoothed_time << " sec" << endl
+         << "  memset peak extracted=" << g_xcorr_memset_peak_extracted_time << " sec" << endl
+         << "LoadIons=" << g_xcorr_load_ions_time << " sec" << endl
+         << "dense allocation=" << g_xcorr_alloc_dense_time << " sec" << endl
+         << "MakeCorrData=" << g_xcorr_make_corr_time << " sec" << endl
+         << "fast window loop=" << g_xcorr_fast_window_time << " sec" << endl
+         << "fast xcorr data loop=" << g_xcorr_fast_data_time << " sec" << endl
+         << "sparse neutral-loss matrix=" << g_xcorr_sparse_nl_time << " sec" << endl
+         << "sparse matrix=" << g_xcorr_sparse_time << " sec" << endl
+         << endl;
 }

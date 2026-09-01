@@ -1,4 +1,7 @@
 #include "ms2scan.h"
+#ifdef SIPROS_MVH_PROFILE
+#include "mvh_profile.h"
+#endif
 
 /**********switching from weightsum to ranksum needs to turn on some function in ms2scan.cpp and peptide.cpp *******/
 
@@ -743,6 +746,7 @@ void MS2Scan::scorePeptides()
 
 void MS2Scan::scorePeptidesMVH(vector<double> *sequenceIonMasses, vector<double> *pdAAforward, vector<double> *pdAAreverse, vector<char> *Seqs)
 {
+	int candidateCount = (int)vMassChargePeptidePtrTuples.size();
 	if (!bSkip)
 	{
 		int i = 0;
@@ -754,6 +758,9 @@ void MS2Scan::scorePeptidesMVH(vector<double> *sequenceIonMasses, vector<double>
 			dMvh = 0;
 			peptidePtr = get<2>(vMassChargePeptidePtrTuples[i]);
 			precursorCharge = get<1>(vMassChargePeptidePtrTuples[i]);
+#ifdef SIPROS_MVH_PROFILE
+			MvhProfile::beginCandidate(iScanId, i);
+#endif
 			if (!mergePeptide(vpWeightSumTopPeptides, peptidePtr->getPeptideSeq(), peptidePtr->getProteinName()))
 			{
 				if (MVH::ScoreSequenceVsSpectrum(peptidePtr->sNeutralLossPeptide, precursorCharge,
@@ -769,6 +776,9 @@ void MS2Scan::scorePeptidesMVH(vector<double> *sequenceIonMasses, vector<double>
 		// cerr << "error scorePeptidesMVH" << endl;
 		// exit(1);
 	}
+#ifdef SIPROS_MVH_PROFILE
+	MvhProfile::writeScanSummary(this, candidateCount);
+#endif
 	vMassChargePeptidePtrTuples.clear();
 }
 
@@ -1121,6 +1131,9 @@ void MS2Scan::preprocessMvh(multimap<double, double> *pIntenSortedPeakPreData)
 	this->intenClassCounts = new vector<int>();
 	MVH::Preprocess(this, pIntenSortedPeakPreData);
 	this->pPeakList = new PeakList(peakData);
+#ifdef SIPROS_MVH_PROFILE
+	MvhProfile::writeObservedPeaks(this);
+#endif
 	delete peakData;
 	peakData = NULL;
 }

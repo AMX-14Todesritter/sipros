@@ -6,6 +6,9 @@
  */
 
 #include "MVH.h"
+#ifdef SIPROS_MVH_PROFILE
+#include "mvh_profile.h"
+#endif
 
 bool MVH::bUseSmartPlusThreeModel = true;
 lnFactorialTable * MVH::lnTable = NULL;
@@ -612,6 +615,10 @@ bool MVH::ScoreSequenceVsSpectrum(string & currentPeptide, int precursorCharge, 
 
 	for (int j = 0; j < (int) seqIons->size(); ++j) {
 		if (seqIons->at(j) < Spectrum->mzLowerBound || seqIons->at(j) > Spectrum->mzUpperBound) {
+#ifdef SIPROS_MVH_PROFILE
+			MvhProfile::recordFragmentQuery(Spectrum, currentPeptide, precursorCharge, j, seqIons->at(j),
+					ProNovoConfig::getMassAccuracyFragmentIon(), false, pPeakList->end());
+#endif
 			--totalPeaks;
 			continue;
 		}
@@ -620,6 +627,10 @@ bool MVH::ScoreSequenceVsSpectrum(string & currentPeptide, int precursorCharge, 
 		//end
 
 		peakItr = pPeakList->findNear(seqIons->at(j), ProNovoConfig::getMassAccuracyFragmentIon());
+#ifdef SIPROS_MVH_PROFILE
+		MvhProfile::recordFragmentQuery(Spectrum, currentPeptide, precursorCharge, j, seqIons->at(j),
+				ProNovoConfig::getMassAccuracyFragmentIon(), true, peakItr);
+#endif
 		if (peakItr != pPeakList->end() && peakItr > 0) {
 			++(mvhKey.at(peakItr - 1));
 			local_matched_ions++;

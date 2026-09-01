@@ -33,6 +33,7 @@ __pycache__/
 test/
 test_output/
 experiments/
+build-debug/
 
 # data resources
 raw/

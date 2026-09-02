@@ -4,6 +4,28 @@
 
 ## Sipros5 Setup Guide
 
+### Docker development environment
+
+The repository includes a development container with the C++17, OpenMP, MPI,
+Python, and SeqKit dependencies needed to build Sipros from source.
+
+```bash
+docker compose build
+docker compose run --rm sipros
+```
+
+Inside the container, build all source targets with:
+
+```bash
+./make.sh buildConda
+```
+
+The source tree is bind-mounted at `/workspace/sipros`, so binaries produced in
+`bin/` and `tools/` remain available on the host. The complete Python workflow
+also expects the release-only third-party executables listed in
+`script33/main.py` (for example `raxport`, `percolator`, and `philosopher`) to be
+present in `tools/` or configured in `workflow.cfg`.
+
 ### 1. Create Conda Environment
 
 ```bash

@@ -1,9 +1,12 @@
 services:
   sipros:
     build: .
-    image: sipros-dev
+    image: sipros
+    init: true
     working_dir: /workspace/sipros
     volumes:
       - .:/workspace/sipros
+    environment:
+      PYTHONUNBUFFERED: "1"
     stdin_open: true
     tty: true

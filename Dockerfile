@@ -1,21 +1,25 @@
 FROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
     build-essential \
-    gcc \
-    g++ \
     cmake \
     ninja-build \
     openmpi-bin \
     libopenmpi-dev \
     gdb \
-    google-perftools \
     libgoogle-perftools-dev \
     python3 \
     python3-pip \
     python3-venv \
+    seqkit \
     git \
     wget \
     curl \
@@ -23,8 +27,9 @@ RUN apt-get update && apt-get install -y \
     zip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --upgrade pip && \
-    pip3 install lxml pandas
+RUN python3 -m pip install --no-cache-dir \
+    lxml==4.9.4 \
+    pandas==2.2.3
 
 WORKDIR /workspace/sipros
 

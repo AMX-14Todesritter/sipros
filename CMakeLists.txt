@@ -15,7 +15,9 @@ SET(EXECUTABLE_OUTPUT_PATH "${PROJECT_SOURCE_DIR}/bin")
 
 add_subdirectory(MSToolkit)
 add_subdirectory(openmp)
+option(SIPROS_MVH_ONLY_BUILD "Configure search targets without MPI and workflow tools" OFF)
+if(NOT SIPROS_MVH_ONLY_BUILD)
 add_subdirectory(mpi)
 add_subdirectory(AerithFeatureExtractor)
 add_subdirectory(configGenerator)
-
+endif()

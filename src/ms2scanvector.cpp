@@ -1,5 +1,6 @@
 #include "ms2scanvector.h"
 #include "SiprosReader.h"
+#include <stdexcept>
 
 MS2ScanVector::MS2ScanVector(const string &sFT2FilenameInput, const string &sOutputDirectory,
 							 const string &sConfigFilename, bool bScreenOutput)
@@ -1043,6 +1044,60 @@ void MS2ScanVector::searchDatabaseMvhTask()
 	PeptideUnit::iNumScores = 1;
 	cout << "MVH search done.\n"
 		 << endl;
+}
+
+MS2ScanVector::MvhRunSummary MS2ScanVector::startProcessingMvhOnly(const string &outputPath)
+{
+	if (ProNovoConfig::getSearchType() != "Regular")
+		throw std::runtime_error("MVH-only entry requires Search_Type = Regular");
+	if (vpAllMS2Scans.empty() || vpPrecursorMasses.empty())
+		throw std::runtime_error("No searchable MS2 scans/precursors were loaded");
+	for (const auto *scan : vpAllMS2Scans)
+		if (scan->pPeakList != nullptr || !scan->vpWeightSumTopPeptides.empty())
+			throw std::runtime_error("MVH-only entry requires a freshly loaded, unprocessed scan vector");
+	MvhRunSummary summary;
+	summary.scanCount = vpAllMS2Scans.size();
+	summary.precursorCount = vpPrecursorMasses.size();
+	double begin = omp_get_wtime();
+	preProcessAllMs2Mvh();
+	summary.preprocessSeconds = omp_get_wtime() - begin;
+	begin = omp_get_wtime();
+	searchDatabaseMvh();
+	summary.searchSeconds = omp_get_wtime() - begin;
+	for (const auto *scan : vpAllMS2Scans) {
+		summary.skippedScanCount += scan->bSkip ? 1 : 0;
+		summary.retainedPsmCount += scan->vpWeightSumTopPeptides.size();
+	}
+	writeOutputMvh(outputPath);
+	return summary;
+}
+
+void MS2ScanVector::writeOutputMvh(const string &outputPath) const
+{
+	std::ofstream out(outputPath);
+	if (!out) throw std::runtime_error("Cannot open MVH output: " + outputPath);
+	out.exceptions(std::ios::failbit | std::ios::badbit);
+	out << std::setprecision(17);
+	auto field = [](const string &value) {
+		if (value.find_first_of("\t\r\n\"") == string::npos) return value;
+		string quoted = "\"";
+		for (char c : value) { if (c == '"') quoted += '"'; quoted += c; }
+		return quoted + '"';
+	};
+	out << "input_file\tscan_index\tscan_id\tprecursor_mass\tprecursor_charge"
+		<< "\tpeptide\toriginal_peptide\tprotein_names\tcalculated_mass\tmvh_score\tmvh_rank\n";
+	for (size_t i = 0; i < vpAllMS2Scans.size(); ++i) {
+		const auto *scan = vpAllMS2Scans[i];
+		for (size_t rank = 0; rank < scan->vpWeightSumTopPeptides.size(); ++rank) {
+			const auto *peptide = scan->vpWeightSumTopPeptides[rank];
+			out << field(sFT2Filename) << '\t' << i << '\t' << scan->iScanId
+				<< '\t' << peptide->dMeasuredParentMass << '\t' << peptide->iMeasuredParentCharge
+				<< '\t' << field(peptide->sIdentifiedPeptide) << '\t' << field(peptide->sOriginalPeptide)
+				<< '\t' << field(peptide->sProteinNames) << '\t' << peptide->dCalculatedParentMass
+				<< '\t' << peptide->vdScores[2] << '\t' << rank + 1 << '\n';
+		}
+	}
+	out.close();
 }
 
 void MS2ScanVector::startProcessingMvh()

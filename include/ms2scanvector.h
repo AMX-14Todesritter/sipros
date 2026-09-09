@@ -82,6 +82,18 @@ class MS2ScanVector {
 	string ParsePath(string sPath);
 
 public:
+	struct MvhRunSummary {
+		double preprocessSeconds = 0;
+		double searchSeconds = 0;
+		size_t scanCount = 0;
+		size_t precursorCount = 0;
+		size_t skippedScanCount = 0;
+		size_t retainedPsmCount = 0;
+	};
+	// One run on a freshly loaded object; preserves production MVH search.
+	MvhRunSummary startProcessingMvhOnly(const string &outputPath);
+	// Snapshot before WDP/Xcorr; does not reorder scans or read other scores.
+	void writeOutputMvh(const string &outputPath) const;
 	MS2ScanVector(const string & sFT2FilenameInput, const string & sOutputDirectory, const string & sConfigFilename,
 			bool bScreenOutput);
 	~MS2ScanVector();

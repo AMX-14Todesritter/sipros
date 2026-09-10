@@ -39,3 +39,6 @@ build-profile/
 # data resources
 raw/
 script33/
+
+# Isolated MVH validation build
+build-mvh-only/

@@ -24,7 +24,10 @@
 
 using namespace std;
 
+namespace mvh { class SearchSession; }
+
 class MS2ScanVector {
+	friend class mvh::SearchSession;
 	// All MS2 scans to be scored
 	// the MS2 scans are sorted by their precursor masses
 	vector<MS2Scan *> vpAllMS2Scans;

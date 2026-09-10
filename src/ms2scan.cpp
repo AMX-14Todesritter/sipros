@@ -26,6 +26,7 @@ MS2Scan::MS2Scan()
 	iNumPeptideAssigned = 0;
 	dSumIntensity = 0;
 	iScanId = 0;
+	iParentScanID = 0; // Not all FT2/mzML scans provide a parent scan ID.
 	iParentChargeState = 0;
 	bSetMS2Flag = false;
 	isMS1HighRes = true;

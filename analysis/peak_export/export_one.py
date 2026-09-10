@@ -23,7 +23,7 @@ def prepare(work):
     source.mkdir(parents=True, exist_ok=False)
     for name in ("src", "include", "MSToolkit"):
         shutil.copytree(ROOT / name, source / name,
-                        ignore=shutil.ignore_patterns(".git", "lib", "*.o", "*.a"))
+                        ignore=shutil.ignore_patterns(".git", "*.o", "*.a"))
     shutil.copy2(ROOT / "openmp/main.cpp", source / "main.cpp")
     shutil.copy2(Path(__file__).with_name("export_hook.h"), source / "include/export_hook.h")
     scan = source / "src/ms2scan.cpp"
@@ -46,8 +46,8 @@ def prepare(work):
     # Smaller batches reduce latency/memory; selected scan is still scored through production code.
     replace_once(source / "include/ms2scanvector.h", '#define PEPTIDE_ARRAY_SIZE  2000000',
                  '#define PEPTIDE_ARRAY_SIZE  1000')
-    replace_once(source / "src/ms2scanvector.cpp", '\tsearchDatabaseMvh();',
-                 '\tsearchDatabaseMvh();\n\tstd::cerr << "No theoretical candidate exported for selected scan. Try another scan ID.\\n";\n\tstd::exit(3);')
+    replace_once(source / "src/ms2scanvector.cpp", '\tsearchDatabaseMvh();\n\n\t// Postprocessing all MS2 scans\' results by mult-threading',
+                 '\tsearchDatabaseMvh();\n\tstd::cerr << "No theoretical candidate exported for selected scan. Try another scan ID.\\n";\n\tstd::exit(3);\n\n\t// Postprocessing all MS2 scans\' results by mult-threading')
     replace_once(source / "main.cpp", 'if (ProNovoConfig::getSearchType() == "SIP")',
                  'if (ProNovoConfig::getSearchType() != "Regular")')
     replace_once(source / "main.cpp", '\t\t\tpMainMS2ScanVector->startProcessingWdpSip();',

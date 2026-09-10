@@ -1,0 +1,2 @@
+#pragma once
+#define MVH_BUILD_IDENTITY "@MVH_BUILD_HASH@"

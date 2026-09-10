@@ -5,14 +5,14 @@
 
 ## 在服务器 container 中运行
 
-将整个 `analysis/peak_export/` 目录和当前版本项目源码一起同步到服务器。
-已有 container 时直接在其中运行下面命令，不需要再启动一层 Docker。
-使用本项目 compose 时，从服务器项目根目录执行：
+先检查远程 Git 状态，再逐文件合并改动；不要覆盖远程 `plot_export.py` 或已有实验结果。
+当前 RX-104FF 使用现有容器，从宿主机进入：
 
 ```bash
-docker compose build
-docker compose run --rm sipros
+docker exec -it sipros-sipros-1 bash
 ```
+
+安装依赖、修改环境变量、挂载或容器配置前，先征求用户同意。
 
 容器中（替换为实际输入路径）：
 
@@ -98,3 +98,10 @@ FASTA 蛋白 → 酶切肽段（含 PTM 变体）→ precursor mass 匹配 scan 
 
 实验 scan 不是一个蛋白的所有峰。它可能主要来自一个肽段，也可能包含共分离肽段/噪声，DIA 中尤其可能是混合谱。
 MVH 在当前代码中不直接给整条蛋白与整张实验谱计算分数。
+
+## 2026-09-09 修复
+
+复制规则不再按目录名排除 `lib`，以保留 `MSToolkit/src/expat-2.2.9/lib` 中的 Expat 源码；
+仍排除 `.git`、对象文件和静态库。提前退出钩子锚定原 `startProcessingMvh()` 搜索后的
+后处理注释，避免新增 MVH-only 入口造成多处匹配。已有输出及 `plot_export.py` 不需要替换。
+完整 MVH 搜索基准请使用 [独立入口 A](../mvh_search/README.md)。

@@ -1,0 +1,41 @@
+# Version the on-disk contract against numerical code and build settings.
+file(GLOB MVH_IDENTITY_FILES CONFIGURE_DEPENDS
+  "${PROJECT_SOURCE_DIR}/src/*.cpp" "${PROJECT_SOURCE_DIR}/include/*.h"
+  "${PROJECT_SOURCE_DIR}/openmp/*main.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/include/mvh/*.h")
+list(APPEND MVH_IDENTITY_FILES "${PROJECT_SOURCE_DIR}/CMakeLists.txt"
+  "${PROJECT_SOURCE_DIR}/openmp/CMakeLists.txt" "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
+list(SORT MVH_IDENTITY_FILES)
+set(MVH_IDENTITY_TEXT "${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${BUILD_CONDA}")
+foreach(MVH_SOURCE IN LISTS MVH_IDENTITY_FILES)
+  file(SHA256 "${MVH_SOURCE}" MVH_SOURCE_HASH)
+  string(APPEND MVH_IDENTITY_TEXT "${MVH_SOURCE_HASH};")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MVH_SOURCE}")
+endforeach()
+string(SHA256 MVH_BUILD_HASH "${MVH_IDENTITY_TEXT}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/mvh")
+configure_file(build_identity.h.in "${CMAKE_CURRENT_BINARY_DIR}/include/mvh/build_identity.h" @ONLY)
+add_library(sipros_mvh_snapshot_io STATIC src/snapshot.cpp)
+target_include_directories(sipros_mvh_snapshot_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/MSToolkit/src/zlib-1.2.11")
+target_link_libraries(sipros_mvh_snapshot_io PUBLIC zlib)
+# Keep validation of NaN/Inf effective, even if the search uses fast-math.
+if(NOT MSVC)
+  target_compile_options(sipros_mvh_snapshot_io PRIVATE -fno-fast-math)
+endif()
+set_target_properties(sipros_mvh_snapshot_io PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+add_executable(sipros_mvh_snapshot ${SRC_LIST} src/session.cpp src/main.cpp)
+target_link_libraries(sipros_mvh_snapshot PRIVATE sipros_mvh_snapshot_io OpenMP::OpenMP_CXX)
+foreach(MVH_PROPERTY COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES)
+  get_target_property(MVH_VALUE sipros_mvh_search ${MVH_PROPERTY})
+  if(MVH_VALUE)
+    set_property(TARGET sipros_mvh_snapshot APPEND PROPERTY ${MVH_PROPERTY} "${MVH_VALUE}")
+  endif()
+endforeach()
+set_target_properties(sipros_mvh_snapshot PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+option(SIPROS_MVH_SNAPSHOT_TESTS "Build snapshot contract tests" OFF)
+if(SIPROS_MVH_SNAPSHOT_TESTS)
+  add_executable(mvh_snapshot_contract_test tests/snapshot_test.cpp)
+  target_link_libraries(mvh_snapshot_contract_test PRIVATE sipros_mvh_snapshot_io)
+  set_target_properties(mvh_snapshot_contract_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+endif()

@@ -1,41 +1,50 @@
-# Version the on-disk contract against numerical code and build settings.
-file(GLOB MVH_IDENTITY_FILES CONFIGURE_DEPENDS
-  "${PROJECT_SOURCE_DIR}/src/*.cpp" "${PROJECT_SOURCE_DIR}/include/*.h"
-  "${PROJECT_SOURCE_DIR}/openmp/*main.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/include/mvh/*.h")
-list(APPEND MVH_IDENTITY_FILES "${PROJECT_SOURCE_DIR}/CMakeLists.txt"
-  "${PROJECT_SOURCE_DIR}/openmp/CMakeLists.txt" "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
-list(SORT MVH_IDENTITY_FILES)
-set(MVH_IDENTITY_TEXT "${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${BUILD_CONDA}")
-foreach(MVH_SOURCE IN LISTS MVH_IDENTITY_FILES)
-  file(SHA256 "${MVH_SOURCE}" MVH_SOURCE_HASH)
-  string(APPEND MVH_IDENTITY_TEXT "${MVH_SOURCE_HASH};")
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MVH_SOURCE}")
+cmake_minimum_required(VERSION 3.12)
+project(SiprosMvhOriginal LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+find_package(OpenMP REQUIRED)
+get_filename_component(SIPROS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+# Shared vendor dependency; no duplicated MSToolkit checkout.
+include_directories("${SIPROS_ROOT}/MSToolkit/include")
+add_subdirectory("${SIPROS_ROOT}/MSToolkit" "${CMAKE_BINARY_DIR}/vendor")
+foreach(lib mstoolkit expat mzid mzparser zlib)
+  set_target_properties(${lib} PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 endforeach()
-string(SHA256 MVH_BUILD_HASH "${MVH_IDENTITY_TEXT}")
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/mvh")
-configure_file(build_identity.h.in "${CMAKE_CURRENT_BINARY_DIR}/include/mvh/build_identity.h" @ONLY)
-add_library(sipros_mvh_snapshot_io STATIC src/snapshot.cpp)
-target_include_directories(sipros_mvh_snapshot_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/MSToolkit/src/zlib-1.2.11")
-target_link_libraries(sipros_mvh_snapshot_io PUBLIC zlib)
-# Keep validation of NaN/Inf effective, even if the search uses fast-math.
-if(NOT MSVC)
-  target_compile_options(sipros_mvh_snapshot_io PRIVATE -fno-fast-math)
+set(ORIGINAL_SOURCES
+  original/src/CometSearchMod.cpp original/src/MVH.cpp
+  original/src/SiprosReader.cpp original/src/averagine.cpp
+  original/src/isotopologue.cpp original/src/ms2scan.cpp
+  original/src/peptide.cpp
+  original/src/proNovoConfig.cpp original/src/proteindatabase.cpp
+  original/src/ptm.cpp original/src/tokenvector.cpp)
+add_library(mvh_original STATIC ${ORIGINAL_SOURCES}
+  src/mvh_scan_vector.cpp src/spectrum_input.cpp src/database_search.cpp)
+target_include_directories(mvh_original PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/original/include")
+target_link_libraries(mvh_original PUBLIC mstoolkit OpenMP::OpenMP_CXX)
+if(MSVC)
+  target_compile_options(mvh_original PRIVATE /fp:fast /openmp:experimental /openmp:llvm /arch:AVX2)
+else()
+  # Same floating-point/architecture options as upstream BUILD_CONDA=ON.
+  target_compile_options(mvh_original PRIVATE -ffast-math -march=native)
 endif()
-set_target_properties(sipros_mvh_snapshot_io PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-add_executable(sipros_mvh_snapshot ${SRC_LIST} src/session.cpp src/main.cpp)
-target_link_libraries(sipros_mvh_snapshot PRIVATE sipros_mvh_snapshot_io OpenMP::OpenMP_CXX)
-foreach(MVH_PROPERTY COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES)
-  get_target_property(MVH_VALUE sipros_mvh_search ${MVH_PROPERTY})
-  if(MVH_VALUE)
-    set_property(TARGET sipros_mvh_snapshot APPEND PROPERTY ${MVH_PROPERTY} "${MVH_VALUE}")
-  endif()
-endforeach()
-set_target_properties(sipros_mvh_snapshot PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-option(SIPROS_MVH_SNAPSHOT_TESTS "Build snapshot contract tests" OFF)
-if(SIPROS_MVH_SNAPSHOT_TESTS)
-  add_executable(mvh_snapshot_contract_test tests/snapshot_test.cpp)
-  target_link_libraries(mvh_snapshot_contract_test PRIVATE sipros_mvh_snapshot_io)
-  set_target_properties(mvh_snapshot_contract_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(WIN32)
+  target_compile_definitions(mvh_original PUBLIC _NO_THERMORAW _NOSQLITE)
+else()
+  target_compile_definitions(mvh_original PUBLIC GCC _FILE_OFFSET_BITS=64 _NOSQLITE)
 endif()
+add_executable(sipros_mvh app/main.cpp app/runner.cpp)
+target_link_libraries(sipros_mvh PRIVATE mvh_original)
+set_target_properties(sipros_mvh PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+enable_testing()
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME mvh_original_source_identity
+  COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_original.py")
+add_test(NAME mvh_cli_and_sample
+  COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_run.py"
+          --binary $<TARGET_FILE:sipros_mvh> --root "${SIPROS_ROOT}")
+
+add_test(NAME mvh_extracted_methods_identity
+  COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_extraction.py")

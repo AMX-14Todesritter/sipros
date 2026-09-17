@@ -2,6 +2,13 @@ services:
   sipros:
     build: .
     image: sipros
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     init: true
     working_dir: /workspace/sipros
     volumes:

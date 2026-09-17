@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 

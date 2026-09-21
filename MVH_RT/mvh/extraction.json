@@ -1,0 +1,34 @@
+{
+  "original_class": "MS2ScanVector",
+  "extracted_class": "MvhScanVector",
+  "source": "original/src/ms2scanvector.cpp",
+  "files": {
+    "src/mvh_scan_vector.cpp": [
+      "MS2ScanVector",
+      "~MS2ScanVector",
+      "preMvh",
+      "postMvh"
+    ],
+    "src/spectrum_input.cpp": [
+      "setOutputFile",
+      "ReadFT2File",
+      "ReadMzmlFile",
+      "loadFT2File",
+      "loadMassData",
+      "isMS1HighRes",
+      "ChargeDetermination",
+      "mygreater",
+      "myless",
+      "saveFT2Scan",
+      "saveMzmlScan",
+      "preProcessAllMs2Mvh"
+    ],
+    "src/database_search.cpp": [
+      "GetAllRangeFromMass",
+      "GetRangeFromMass",
+      "assignPeptides2Scans",
+      "processPeptideArrayMvh",
+      "searchDatabaseMvh"
+    ]
+  }
+}

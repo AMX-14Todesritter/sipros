@@ -31,7 +31,8 @@ std::size_t writePsms(const std::string &path, const std::string &input,
 
 void mvh_app::run(const std::string &input, const std::string &config,
                   const std::string &fasta, const std::string &output, int threads) {
-    omp_set_num_threads(threads);
+    omp_set_num_threads(1); // Interface retains -t; CUDA replaces CPU parallel work.
+    std::cout << "Requested CPU threads: " << threads << "; CUDA execution uses no OpenMP compute loops\n";
     const double begin = omp_get_wtime();
     if (!ProNovoConfig::setFilename(config)) throw std::runtime_error("Cannot load config");
     if (ProNovoConfig::getSearchType() != "Regular")
@@ -49,13 +50,14 @@ void mvh_app::run(const std::string &input, const std::string &config,
     const double prepared = omp_get_wtime();
     spectra.searchDatabaseMvh();
     const double searched = omp_get_wtime();
-     const auto count = writePsms((std::filesystem::path(output)/"mvh_psms.tsv").string(), input, scans);
+    const auto count = writePsms((std::filesystem::path(output)/"mvh_psms.tsv").string(), input, scans);
     const double exported = omp_get_wtime();
     std::size_t skipped=0;
     for (const auto *scan : scans) if (scan->bSkip) ++skipped;
     std::ofstream report(std::filesystem::path(output)/"run_summary.tsv");
     report.exceptions(std::ios::failbit | std::ios::badbit);
     report << std::setprecision(17) << "metric\tvalue\n"
+           << "backend\tcuda\n"
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
            << "peptide_batch_size\t" << PEPTIDE_ARRAY_SIZE << '\n'
            << "config_and_load_seconds\t" << loaded-begin << '\n'

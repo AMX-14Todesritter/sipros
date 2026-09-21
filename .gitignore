@@ -33,10 +33,14 @@ __pycache__/
 test/
 test_output/
 experiments/
+test_data/
+validation/
+runs/
 
 # data resources
 raw/
 script33/
+data/
 
 # Generated build directories and recoverable research reset backup
 /build-*/

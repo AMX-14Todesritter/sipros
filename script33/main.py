@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 import configparser
 import argparse
 import logging
@@ -11,6 +12,10 @@ from feature import feature
 from filter import filter
 from assembly import assembly
 import warnings
+
+# Locate the shared path policy independently of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared.output_paths import resolve_output
 
 
 class SIPROSWorkflow:
@@ -103,7 +108,7 @@ citation:
                             help="Max precursor number in isolation window when converting raw file, recommend 6 in DDA (default) 15 in DIA")
         parser.add_argument('-t', '--thread', required=False, type=int, default=0,
                             help="Thread number to be limited, all threads in default")
-        parser.add_argument('-o', '--output', required=True, help="Output directory path")
+        parser.add_argument('-o', '--output', help="Output directory (default: project output/workflow/sipros/<run>)")
         parser.add_argument('--ignorePCT', action='store_true', 
                             help='Ignore isotopic percentage of MS1 and MS2 when filtering few SIP labeled PSMs')
         parser.add_argument('--negative_control', required=False, type=str,
@@ -124,6 +129,7 @@ citation:
         # if -e is not provided, set it to "R" for regular search
         if not args.element:
             args.element = "R"
+        args.output = str(resolve_output(args.output, "workflow", "sipros", args.element))
         return args
 
     def initLogger(self, outputPath: str) -> Logger:

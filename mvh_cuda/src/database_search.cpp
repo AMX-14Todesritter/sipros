@@ -85,94 +85,44 @@ pair<int, int> MvhScanVector::GetRangeFromMass(double lb, double ub)
 	return p;
 }
 
-bool MvhScanVector::assignPeptides2Scans(Peptide *currentPeptide)
+void MvhScanVector::assignPeptides2Scans(const vector<Peptide *> &peptides)
 {
-	int i, j;
-	bool bAssigned = false;
-	vector<pair<int, int>> vpPeptideMassRanges;
-	pair<int, int> pairMS2Range;
-
-	GetAllRangeFromMass(currentPeptide->getPeptideMass(), vpPeptideMassRanges);
-
-	for (j = 0; j < (int)vpPeptideMassRanges.size(); j++)
-	{
-		pairMS2Range = vpPeptideMassRanges.at(j);
-		if ((pairMS2Range.first > -1) && (pairMS2Range.second > -1))
-		{
-			for (i = pairMS2Range.first; i <= pairMS2Range.second; i++)
-			{ // vpAllMS2ScanPtrs.at(i)->vpPeptides.push_back(currentPeptide);
-				// for DIA and DDA with large isolation window
-				tuple<double, int, Peptide *> currentMassChargePeptidePtrTuple =
-					{
-						get<0>(vAllPrecursorMassChargeMS2ScanPtrTuples[i]),
-						get<1>(vAllPrecursorMassChargeMS2ScanPtrTuples[i]),
-						currentPeptide};
-				get<2>(vAllPrecursorMassChargeMS2ScanPtrTuples[i])
-					->vMassChargePeptidePtrTuples.push_back(currentMassChargePeptidePtrTuple);
-			}
-			bAssigned = true;
-		}
-	}
-	return bAssigned;
+    mvh_cuda::assignPeptides2Scans(peptides, vAllPrecursorMassChargeMS2ScanPtrTuples,
+                                 vpAllMS2Scans);
 }
 
 void MvhScanVector::processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray)
 {
+    assignPeptides2Scans(vpPeptideArray);
     mvh_cuda::preprocessingMVH(vpPeptideArray);
-    mvh_cuda::scorePeptidesMVH(vpAllMS2Scans);
+    mvh_cuda::scorePeptidesMVH(vpAllMS2Scans, vpPeptideArray);
     for (auto *peptide : vpPeptideArray) delete peptide;
     vpPeptideArray.clear();
 }
 
 void MvhScanVector::searchDatabaseMvh()
 {
-	CLOCKSTART;
-
-	ProteinDatabase myProteinDatabase(bScreenOutput);
-	vector<Peptide *> vpPeptideArray;
-	Peptide *currentPeptide;
-	myProteinDatabase.loadDatabase();
-	this->preMvh();
-	if (myProteinDatabase.getFirstProtein())
-	{
-		currentPeptide = new Peptide;
-		// get one peptide from the database at a time, until there is no more peptide
-		while (myProteinDatabase.getNextPeptide(currentPeptide))
-		{
-			// assign the pointers of peptides to appropriete MS2Scans
-			if (assignPeptides2Scans(currentPeptide))
-			{
-				// save the new peptide to the array
-				vpPeptideArray.push_back(currentPeptide);
-				if (currentPeptide->getPeptideMass() > ProNovoConfig::dMaxPeptideMass)
-				{
-					ProNovoConfig::dMaxPeptideMass = currentPeptide->getPeptideMass();
-				}
-			}
-			else
-			{
-				delete currentPeptide;
-			}
-			// create a new peptide for the next iteration
-			currentPeptide = new Peptide;
-			// when the vpPeptideArray is full
-			if (vpPeptideArray.size() >= PEPTIDE_ARRAY_SIZE)
-				processPeptideArrayMvh(vpPeptideArray);
-		}
-		// the last peptide object is an empty object and need to be deleted
-		delete currentPeptide;
-		// there are still unprocessed peptides in the vpPeptideArray
-		// need to process them in the same manner
-		// the following code is the same as inside if(vpPeptideArray.size() >= PEPTIDE_ARRAY_SIZE )
-		//    cout<<vpPeptideArray.size()<<endl;
-		if (!vpPeptideArray.empty())
-			processPeptideArrayMvh(vpPeptideArray);
-	}
-	CLOCKSTOP;
-
-	this->postMvh();
-	MVH::destroyLnTable();
-	PeptideUnit::iNumScores = 1;
-	cout << "MVH search done.\n"
-		 << endl;
+    CLOCKSTART;
+    ProteinDatabase myProteinDatabase(bScreenOutput);
+    vector<Peptide *> vpPeptideArray;
+    myProteinDatabase.loadDatabase();
+    this->preMvh();
+    if (myProteinDatabase.getFirstProtein()) {
+        auto *currentPeptide = new Peptide;
+        while (myProteinDatabase.getNextPeptide(currentPeptide)) {
+            // Bound the batch by generated peptides. GPU assignment replaces
+            // the former per-peptide CPU query; scan-local order stays intact.
+            vpPeptideArray.push_back(currentPeptide);
+            currentPeptide = new Peptide;
+            if (vpPeptideArray.size() >= size_t(mvh_cuda::peptideBatchSize()))
+                processPeptideArrayMvh(vpPeptideArray);
+        }
+        delete currentPeptide;
+        if (!vpPeptideArray.empty()) processPeptideArrayMvh(vpPeptideArray);
+    }
+    CLOCKSTOP;
+    this->postMvh();
+    MVH::destroyLnTable();
+    PeptideUnit::iNumScores = 1;
+    cout << "MVH search done.\n" << endl;
 }

@@ -1,4 +1,5 @@
 #include "runner.h"
+#include "output_paths.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -13,7 +14,9 @@ int main(int argc, char **argv) {
             std::string key=argv[i];
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta -o NEW_DIRECTORY [-t threads]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads]\n";
+                std::cout << "Default output: output/search/mvh/<input>_<UTC timestamp>/\n"
+                             "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;
             }
             if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t")
@@ -21,7 +24,7 @@ int main(int argc, char **argv) {
             if (++i==argc || options.count(key)) throw std::runtime_error("Missing/duplicate option: "+key);
             options[key]=argv[i];
         }
-        for (const auto *key : {"-f","-c","-fasta","-o"})
+        for (const auto *key : {"-f","-c","-fasta"})
             if (!options.count(key) || options[key].empty()) throw std::runtime_error(std::string("Required: ")+key);
         int threads=1;
         if (options.count("-t")) {
@@ -40,6 +43,11 @@ int main(int argc, char **argv) {
         if (ext!=".ft2" && ext!=".mzml") throw std::runtime_error("Expected FT2 or mzML");
         std::ifstream fasta(options["-fasta"]);
         if (fasta.peek()!='>') throw std::runtime_error("FASTA must begin with >");
+        if (!options.count("-o")) {
+            options["-o"] = sipros_output::searchDirectory("mvh", options["-f"]).string();
+        } else if (options["-o"].empty()) {
+            throw std::runtime_error("Output directory must not be empty");
+        }
         options["-o"]=std::filesystem::absolute(options["-o"]).lexically_normal().string();
         if (std::filesystem::exists(options["-o"])) throw std::runtime_error("Output already exists");
         mvh_app::run(options["-f"],options["-c"],options["-fasta"],options["-o"],threads);

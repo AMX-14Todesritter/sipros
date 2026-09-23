@@ -5,6 +5,7 @@ tools/
 MSToolkit/lib/
 
 # Runtime / generated outputs
+/NEW_OUTPUT_DIRECTORY/
 results/
 output/
 *.log

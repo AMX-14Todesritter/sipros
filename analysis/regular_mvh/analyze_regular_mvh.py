@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Analyze existing Sipros Regular MVH profiling CSVs without dependencies."""
 
+import argparse
+import sys
 import csv
 import json
 import math
@@ -8,9 +10,12 @@ import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Locate the shared path policy independently of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shared.output_paths import resolve_output
+
 ROOT = Path(__file__).resolve().parents[2]
 INPUT = ROOT / "experiments" / "ecoli_regular"
-OUTPUT = Path(__file__).resolve().parent / "output"
 
 
 def read_csv(name):
@@ -142,7 +147,11 @@ def spectrum_svg(path, peaks, queries, candidate, zoom=None):
 
 
 def main():
-    OUTPUT.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, help="New output directory (default: project output tree)")
+    args = parser.parse_args()
+    output = resolve_output(args.output, "analysis", "regular_mvh", "ecoli")
+    output.mkdir(parents=True, exist_ok=False)
     scans=read_csv("scan_summary.thread_0.csv"); observed=read_csv("observed_peaks.thread_0.csv"); fragments=read_csv("fragment_queries.thread_0.csv")
     for r in fragments:
         for k in ("scan_id","candidate_index","precursor_charge","fragment_index","in_spectrum_range","hit","matched_peak_index","mvh_class","num_peaks_in_window"): r[k]=number(r,k,True)
@@ -160,7 +169,7 @@ def main():
         candidates.append({"scan_id":key[0],"candidate_index":key[1],"peptide_sequence":key[2],"theoretical_fragment_queries":len(rows),"in_range_queries":len(ir),"hits":len(hits),"misses":len(ir)-len(hits),"hit_rate":len(hits)/len(ir) if ir else 0,"mean_num_peaks_in_window":statistics.fmean(r["num_peaks_in_window"] for r in ir) if ir else 0,"max_num_peaks_in_window":max((r["num_peaks_in_window"] for r in ir),default=0),"mean_absolute_mass_error":statistics.fmean(errors) if errors else None,"median_absolute_mass_error":statistics.median(errors) if errors else None,"matched_observed_peaks":len(hits),"unique_matched_peak_indices":len(matched),"duplicated_matches":len(hits)-len(matched),"max_peak_reuse_count":max(matched.values(),default=0)})
     candidates.sort(key=lambda x:(x["scan_id"],x["candidate_index"],x["peptide_sequence"]))
     fields=list(candidates[0])
-    with (OUTPUT/"candidate_summary.csv").open("w",newline="") as h:
+    with (output/"candidate_summary.csv").open("w",newline="") as h:
         w=csv.DictWriter(h,fieldnames=fields); w.writeheader(); w.writerows(candidates)
 
     # Validation.
@@ -227,7 +236,7 @@ def main():
     selected={"typical":typical,"high_hit":max(candidates,key=lambda c:c["hit_rate"]),"low_hit_normal_queries":min(normal,key=lambda c:(c["hit_rate"],-c["theoretical_fragment_queries"])),"dense_window":max(candidates,key=lambda c:(c["max_num_peaks_in_window"],c["mean_num_peaks_in_window"]))}
     summary_scan=next(s for s in scans if int(s["scan_id"])==typical["scan_id"])
     for c in selected.values(): c.update(raw_peak_count=int(summary_scan["raw_peak_count"]),processed_peak_count=int(summary_scan["processed_peak_count"]))
-    with (OUTPUT/"representative_candidates.csv").open("w",newline="") as h:
+    with (output/"representative_candidates.csv").open("w",newline="") as h:
         f=["selection"]+list(next(iter(selected.values())).keys()); w=csv.DictWriter(h,fieldnames=f); w.writeheader()
         for label,c in selected.items(): w.writerow({"selection":label,**c})
 
@@ -242,26 +251,26 @@ def main():
         reuse_examples.append({"scan_id":c["scan_id"],"candidate_index":c["candidate_index"],"peptide_sequence":c["peptide_sequence"],"peak_index":idx,"reuse_count":n,"theoretical_mz":qs})
 
     stats={"row_counts":{"scan_summary":len(scans),"observed_peaks":len(observed),"fragment_queries":len(fragments)},"missing_values":missing,"validation":validation,"peak_reconstruction":peak_checks,"window_statistics":windows,"absolute_mass_error":describe(abs_errors),"normalized_mass_error":describe(normalized),"density_by_scan":density,"local_bin_density":density_stats,"candidate_count":len(candidates),"candidate_hit_rate":describe(c["hit_rate"] for c in candidates),"candidate_query_count":describe(c["theoretical_fragment_queries"] for c in candidates),"processed_peak_count":describe(int(s["processed_peak_count"]) for s in scans),"total_query_workload":len(fragments),"reuse_candidate_count":len(reuse),"reuse_examples":reuse_examples}
-    (OUTPUT/"workload_statistics.json").write_text(json.dumps(stats,indent=2,sort_keys=True))
+    (output/"workload_statistics.json").write_text(json.dumps(stats,indent=2,sort_keys=True))
 
     # Plots.
-    svg_plot(OUTPUT/"hit_vs_miss_fraction.svg","In-range query outcomes","Outcome (0=hit, 1=miss)","Fraction",[{"points":[(0,len(hits)/len(inrange)),(1,len(misses)/len(inrange))]}])
-    wc=Counter(r["num_peaks_in_window"] for r in inrange); svg_plot(OUTPUT/"num_peaks_in_window_distribution.svg","Peaks inside strict tolerance window","W(q)","Query count",[{"points":sorted(wc.items())}])
-    svg_plot(OUTPUT/"normalized_mass_error_histogram.svg","Normalized absolute mass error","|mass error| / tolerance","Hit count",[{"points":histogram(normalized,30,0,1)}])
-    svg_plot(OUTPUT/"processed_peak_count_per_scan.svg","Processed peak count per summary row","Summary row","Processed peaks",[{"points":[(i+1,int(s["processed_peak_count"])) for i,s in enumerate(scans)]}])
-    svg_plot(OUTPUT/"candidate_hit_rate_distribution.svg","Candidate hit-rate distribution","Hit rate","Candidate count",[{"points":histogram([c["hit_rate"] for c in candidates],25,0,max(c["hit_rate"] for c in candidates))}])
-    svg_plot(OUTPUT/"candidate_query_count_distribution.svg","Theoretical queries per candidate","Query count","Candidate count",[{"points":histogram([c["theoretical_fragment_queries"] for c in candidates],25)}])
+    svg_plot(output/"hit_vs_miss_fraction.svg","In-range query outcomes","Outcome (0=hit, 1=miss)","Fraction",[{"points":[(0,len(hits)/len(inrange)),(1,len(misses)/len(inrange))]}])
+    wc=Counter(r["num_peaks_in_window"] for r in inrange); svg_plot(output/"num_peaks_in_window_distribution.svg","Peaks inside strict tolerance window","W(q)","Query count",[{"points":sorted(wc.items())}])
+    svg_plot(output/"normalized_mass_error_histogram.svg","Normalized absolute mass error","|mass error| / tolerance","Hit count",[{"points":histogram(normalized,30,0,1)}])
+    svg_plot(output/"processed_peak_count_per_scan.svg","Processed peak count per summary row","Summary row","Processed peaks",[{"points":[(i+1,int(s["processed_peak_count"])) for i,s in enumerate(scans)]}])
+    svg_plot(output/"candidate_hit_rate_distribution.svg","Candidate hit-rate distribution","Hit rate","Candidate count",[{"points":histogram([c["hit_rate"] for c in candidates],25,0,max(c["hit_rate"] for c in candidates))}])
+    svg_plot(output/"candidate_query_count_distribution.svg","Theoretical queries per candidate","Query count","Candidate count",[{"points":histogram([c["theoretical_fragment_queries"] for c in candidates],25)}])
     series=[]
     for i,size in enumerate((1,5,10)): series.append({"points":sorted(Counter(density_values[size]).items()),"kind":"line","color":["#2864b7","#d34e30","#2a8c65"][i]})
-    svg_plot(OUTPUT/"local_retained_peak_density_distribution.svg","Local retained-peak counts (lines: 1, 5, 10 Da bins)","Peaks per bin","Number of bins",series)
+    svg_plot(output/"local_retained_peak_density_distribution.svg","Local retained-peak counts (lines: 1, 5, 10 Da bins)","Peaks per bin","Number of bins",series)
 
     peak_rows=obs_by_scan[typical["scan_id"]]; qrows=groups[(typical["scan_id"],typical["candidate_index"],typical["peptide_sequence"])]
-    spectrum_svg(OUTPUT/"typical_candidate_full_spectrum.svg",peak_rows,qrows,typical)
+    spectrum_svg(output/"typical_candidate_full_spectrum.svg",peak_rows,qrows,typical)
     # Smallest interval joining opposite outcomes, with enough padding to show both.
     ir=sorted((r for r in qrows if r["in_spectrum_range"]),key=lambda r:r["theoretical_mz"])
     pairs=[(abs(a["theoretical_mz"]-b["theoretical_mz"]),a,b) for a in ir for b in ir if a["hit"] != b["hit"]]
     _,a,b=min(pairs,key=lambda x:x[0]); lo=min(a["theoretical_mz"],b["theoretical_mz"]); hi=max(a["theoretical_mz"],b["theoretical_mz"]); pad=max(0.05,(hi-lo)*0.08)
-    spectrum_svg(OUTPUT/"typical_candidate_zoom.svg",peak_rows,qrows,typical,(lo-pad,hi+pad))
+    spectrum_svg(output/"typical_candidate_zoom.svg",peak_rows,qrows,typical,(lo-pad,hi+pad))
 
     # Human-readable concise report.
     lines=["# Sipros Regular MVH workload analysis","",f"Analyzed {len(fragments):,} fragment rows, {len(observed):,} observed-peak rows, and {len(scans)} summary rows. Both summary rows have scan_id 5678; their counters combine exactly to the fragment reconstruction.","","## Validation","",f"- Summary identities all pass: {all(x['matched_plus_missed_ok'] and x['in_range_le_total'] for x in summary_internal)}; maximum stored hit-rate difference: {max(abs(x['hit_rate_difference']) for x in summary_internal):.3g}.",f"- Fragment reconstruction equals combined summary counters: {reconstructed==summary_combined}.",f"- HIT anomalies (bad index / missing m/z / missing error / error outside tolerance / W<=0): {validation['hit_bad_index']} / {validation['hit_missing_mz']} / {validation['hit_missing_error']} / {validation['hit_error_not_strictly_below_tolerance']} / {validation['hit_nonpositive_window']}.",f"- Mass-error convention is matched_peak_mz - theoretical_mz; max CSV-rounding residual {validation['mass_error_sign_max_abs_residual']:.3g} Da.",f"- MISS anomalies (index != -1 / populated match fields / W>0): {validation['miss_index_not_minus_one']} / {validation['miss_with_mz_or_error']} / {validation['miss_with_positive_window']}.","","## Workload","",f"- In-range: {len(inrange):,}; hits: {len(hits):,}; misses: {len(misses):,}; hit rate: {len(hits)/len(inrange):.4%}.",f"- W all: P0={windows['all_in_range']['p_w_0']:.4%}, P1={windows['all_in_range']['p_w_1']:.4%}, P2={windows['all_in_range']['p_w_2']:.4%}, P>=3={windows['all_in_range']['p_w_ge_3']:.4%}; mean={windows['all_in_range']['mean']:.4g}, p95={windows['all_in_range']['p95']:.4g}, max={windows['all_in_range']['max']}.",f"- W hits: P1={windows['hits']['p_w_1']:.4%}, P2={windows['hits']['p_w_2']:.4%}, P>=3={windows['hits']['p_w_ge_3']:.4%}; max={windows['hits']['max']}.",f"- W misses: P0={windows['misses']['p_w_0']:.4%}; positive-window misses={validation['miss_with_positive_window']}.",f"- Absolute hit error: mean={fmt(describe(abs_errors)['mean'])} Da, median={fmt(describe(abs_errors)['median'])}, p95={fmt(describe(abs_errors)['p95'])}, max={fmt(describe(abs_errors)['max'])}.",f"- Normalized error: mean={fmt(describe(normalized)['mean'])}, median={fmt(describe(normalized)['median'])}, p90={fmt(describe(normalized)['p90'])}, p95={fmt(describe(normalized)['p95'])}, p99={fmt(describe(normalized)['p99'])}.",f"- Candidate queries: median={fmt(describe(c['theoretical_fragment_queries'] for c in candidates)['median'])}, mean={fmt(describe(c['theoretical_fragment_queries'] for c in candidates)['mean'])}; total={len(fragments):,}.",f"- Candidates with repeated use of a matched peak: {len(reuse)}/{len(candidates)}.","","## Interpretation","","Measured evidence: this is overwhelmingly interval-existence work: almost all misses have an empty strict tolerance window, and W quantifies how rarely nearest selection has multiple choices. The retained spectrum has 55 peaks spanning its recorded retained range, so geometry is small while query count is large and hit rate is low.","","Hypothesis to test, not a performance claim: RT/BVH may benefit from batched queries but competes with a very small integer-bucket lookup. Before implementation, measure pMassHub entries actually visited, bucket-range sizes, CPU time/cycles and cache behavior, batch/build/transfer overheads, and scaling over many scans and peak densities. `num_peaks_in_window` cannot supply current lookup cost because `findNear` visits every peak in selected integer-m/z buckets before applying the strict tolerance test; therefore `num_peaks_inspected_by_findNear` is valuable for fair pMassHub, binary-search, CUDA, and BVH/RT comparisons.","","Full machine-readable details are in `workload_statistics.json`; selections are in `representative_candidates.csv`."]
@@ -286,8 +295,8 @@ def main():
       "## Representative selections","",
       *[f"- {label}: scan {c['scan_id']}, candidate {c['candidate_index']}, `{c['peptide_sequence']}`; raw/processed peaks {c['raw_peak_count']}/{c['processed_peak_count']}; fragments {c['theoretical_fragment_queries']}; hits/misses {c['hits']}/{c['misses']}; hit rate {c['hit_rate']:.4%}; mean/max W {c['mean_num_peaks_in_window']:.4g}/{c['max_num_peaks_in_window']}." for label,c in selected.items()],"",
       "The high-hit and dense-window labels select the same candidate because the observed maximum W is only 1. No observed peak reuse occurs in any of the 573 candidate instances; consequently there are no concrete reuse examples to list."])
-    (OUTPUT/"report.md").write_text("\n".join(lines)+"\n")
-    print(f"Wrote analysis outputs to {OUTPUT}")
+    (output/"report.md").write_text("\n".join(lines)+"\n")
+    print(f"Wrote analysis outputs to {output}")
 
 
 if __name__ == "__main__": main()

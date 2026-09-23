@@ -1,4 +1,6 @@
 <p align="center">
+
+Generated output layout and default paths: [OUTPUT_LAYOUT.md](OUTPUT_LAYOUT.md).
   <img src="script33/sipros_logo.png" alt="Sipros5 logo" width="240">
 </p>
 
@@ -54,28 +56,28 @@ gunzip UP000000625_83333.fasta.gz -c > Ecoli.fasta
 #### Regular Search
 
 ```bash
-siproswf -i raw/Pan_062822_X1iso5.raw -f Ecoli.fasta -o regular_output
+siproswf -i raw/Pan_062822_X1iso5.raw -f Ecoli.fasta -o output/workflow/regular
 ```
 
 #### Extract protein sequences identified in Regular search
 
-- This step is particularly useful when your protein FASTA is large (for example, several GB in metaproteomics studies). The `regular_output/protein.tsv` file can be replaced with results from other proteomics search engines (e.g., FragPipe, MaxQuant, or Proteome Discoverer) as long as the first column contains the protein identifier.
+- This step is particularly useful when your protein FASTA is large (for example, several GB in metaproteomics studies). The `output/workflow/regular/protein.tsv` file can be replaced with results from other proteomics search engines (e.g., FragPipe, MaxQuant, or Proteome Discoverer) as long as the first column contains the protein identifier.
 - If you are working with a small FASTA, you can skip this extraction step and use the original FASTA for the label search.
 
 ```bash
-extractPro Ecoli.fasta regular_output/protein.tsv db.faa
+extractPro Ecoli.fasta output/workflow/regular/protein.tsv db.faa
 ```
 
 #### Label Search
 
 ```bash
-siproswf -i raw -f db.faa -e C13 -o sip_output
+siproswf -i raw -f db.faa -e C13 -o output/workflow/sip
 ```
 
 #### Label Search with negative control using unlabeled sample
 
 ```bash
-siproswf -i raw -f db.faa -e C13 --negative_control Pan_062822_X1iso5 -o sip2_output
+siproswf -i raw -f db.faa -e C13 --negative_control Pan_062822_X1iso5 -o output/workflow/sip_control
 ```
 
 ### 5. Output Files
@@ -108,25 +110,25 @@ chmod +x sipros/tools/* sipros/script33/extractPro.sh
 #### Regular Search
 
 ```bash
-python sipros/script33/main.py -i raw/Pan_062822_X1iso5.raw -f Ecoli.fasta -o regular_output
+python sipros/script33/main.py -i raw/Pan_062822_X1iso5.raw -f Ecoli.fasta -o output/workflow/regular
 ```
 
 #### Extract protein sequences identified in Regular search
 
 ```bash
-sipros/script33/extractPro.sh Ecoli.fasta regular_output/protein.tsv db.faa
+sipros/script33/extractPro.sh Ecoli.fasta output/workflow/regular/protein.tsv db.faa
 ```
 
 #### Label Search
 
 ```bash
-python sipros/script33/main.py -i raw -f db.faa -e C13 -o sip_output
+python sipros/script33/main.py -i raw -f db.faa -e C13 -o output/workflow/sip
 ```
 
 #### Label Search with negative control using unlabeled sample
 
 ```bash
-python sipros/script33/main.py -i raw -f db.faa -e C13 --negative_control Pan_062822_X1iso5 -o sip2_output
+python sipros/script33/main.py -i raw -f db.faa -e C13 --negative_control Pan_062822_X1iso5 -o output/workflow/sip_control
 ```
 
 ### 6. Citations

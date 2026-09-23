@@ -13,8 +13,8 @@
 
 #define PEPTIDE_ARRAY_SIZE 2000000
 
-// MVH-only portion of MS2ScanVector. Original method names/bodies are retained.
-// Only the class name and declaration/access organization differ.
+// MVH-only search hierarchy. Assignment is batched on CUDA; original CPU
+// method names remain available for tracing the search stages.
 class MvhScanVector {
 public:
     MvhScanVector(const string &sFT2FilenameInput, const string &sOutputDirectory,
@@ -50,7 +50,7 @@ private:
     static bool mygreater(double i, double j);
     static bool myless(MS2Scan *pMS2Scan1, MS2Scan *pMS2Scan2);
 
-    bool assignPeptides2Scans(Peptide *currentPeptide);
+    void assignPeptides2Scans(const vector<Peptide *> &peptides);
     pair<int, int> GetRangeFromMass(double lb, double ub);
     void GetAllRangeFromMass(double dPeptideMass, vector<pair<int, int>> &vpPeptideMassRanges);
     void processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray);

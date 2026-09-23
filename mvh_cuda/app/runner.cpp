@@ -1,4 +1,5 @@
 #include "runner.h"
+#include "engine.h"
 #include "mvh_scan_vector.h"
 #include <iomanip>
 #include <stdexcept>
@@ -31,6 +32,7 @@ std::size_t writePsms(const std::string &path, const std::string &input,
 
 void mvh_app::run(const std::string &input, const std::string &config,
                   const std::string &fasta, const std::string &output, int threads) {
+    mvh_cuda::MatchBackendScope matchResources;
     omp_set_num_threads(1); // Interface retains -t; CUDA replaces CPU parallel work.
     std::cout << "Requested CPU threads: " << threads << "; CUDA execution uses no OpenMP compute loops\n";
     const double begin = omp_get_wtime();
@@ -38,8 +40,12 @@ void mvh_app::run(const std::string &input, const std::string &config,
     if (ProNovoConfig::getSearchType() != "Regular")
         throw std::runtime_error("Only Search_Type = Regular is supported");
     ProNovoConfig::setFASTAfilename(fasta);
+    // Create category/run parents while preserving exclusive creation of the run itself.
+    const auto parent = std::filesystem::path(output).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent);
     if (!std::filesystem::create_directory(output))
-        throw std::runtime_error("Output directory must not exist; its parent must exist");
+        throw std::runtime_error("Output directory must not already exist");
+    mvh_cuda::startScoreImpact(output);
     std::filesystem::copy_file(config, std::filesystem::path(output)/"input_config.cfg");
     MvhScanVector spectra(input, output, config, true);
     if (!spectra.loadMassData()) throw std::runtime_error("Cannot load spectra");
@@ -57,9 +63,10 @@ void mvh_app::run(const std::string &input, const std::string &config,
     std::ofstream report(std::filesystem::path(output)/"run_summary.tsv");
     report.exceptions(std::ios::failbit | std::ios::badbit);
     report << std::setprecision(17) << "metric\tvalue\n"
+           << "match_backend\t" << mvh_cuda::matchBackendName() << '\n'
            << "backend\tcuda\n"
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
-           << "peptide_batch_size\t" << PEPTIDE_ARRAY_SIZE << '\n'
+           << "peptide_batch_size\t" << mvh_cuda::peptideBatchSize() << '\n'
            << "config_and_load_seconds\t" << loaded-begin << '\n'
            << "preprocess_seconds\t" << prepared-loaded << '\n'
            << "search_seconds\t" << searched-prepared << '\n'

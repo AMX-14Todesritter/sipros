@@ -8,6 +8,7 @@ from pathlib import Path
 p=argparse.ArgumentParser()
 p.add_argument('--binary',type=Path,required=True)
 p.add_argument('--root',type=Path,required=True)
+p.add_argument('--expect-rt',action='store_true')
 a=p.parse_args()
 data=Path(__file__).resolve().parent/'data'
 with tempfile.TemporaryDirectory(prefix='mvh-check-',dir=a.binary.parent.parent) as tmp:
@@ -21,6 +22,26 @@ with tempfile.TemporaryDirectory(prefix='mvh-check-',dir=a.binary.parent.parent)
         return output
     one=run('t1'); four=run('t4',4)
     assert (one/'mvh_psms.tsv').read_bytes()==(four/'mvh_psms.tsv').read_bytes()
+    if a.expect_rt:
+        def rt_counts(output):
+            with (output/'run_summary.tsv').open() as f:
+                summary=dict(list(csv.reader(f,delimiter='\t'))[1:])
+            counts=tuple(int(summary[k]) for k in ('rt_verified_candidates','rt_verified_ions'))
+            assert all(n > 0 for n in counts), summary
+            return counts
+        single_counts=rt_counts(one)
+        assert rt_counts(four)==single_counts
+        # Multiple scans exercise callbacks from multiple OpenMP workers.
+        sample=(data/'sample.ft2').read_text()
+        header, body=sample.split('S\t1004\t',1)
+        multi=tmp/'multi.ft2'
+        multi.write_text(header+''.join('S\t'+str(i)+'\t'+body.rstrip()+'\n'
+                                       for i in range(1004,1008)))
+        multi_one=run('multi_t1',spectrum=multi)
+        multi_four=run('multi_t4',threads=4,spectrum=multi)
+        assert (multi_one/'mvh_psms.tsv').read_bytes()==(multi_four/'mvh_psms.tsv').read_bytes()
+        assert rt_counts(multi_one)==tuple(4*n for n in single_counts)
+        assert rt_counts(multi_four)==rt_counts(multi_one)
     with (one/'mvh_psms.tsv').open() as f: rows=list(csv.DictReader(f,delimiter='\t'))
     assert any(r['peptide']=='[LDNM~ATK]' for r in rows), rows
     # Existing output rejection must leave results untouched.

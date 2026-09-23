@@ -35,14 +35,12 @@ struct OptixObjects {
     OptixModule module = nullptr;
     OptixProgramGroup raygen = nullptr, miss = nullptr, hit = nullptr;
     OptixPipeline pipeline = nullptr;
-    ~OptixObjects() {
-        if (pipeline) optixPipelineDestroy(pipeline);
-        if (hit) optixProgramGroupDestroy(hit);
-        if (miss) optixProgramGroupDestroy(miss);
-        if (raygen) optixProgramGroupDestroy(raygen);
-        if (module) optixModuleDestroy(module);
-        if (context) optixDeviceContextDestroy(context);
-    }
+
+    OptixObjects() = default;
+    ~OptixObjects();
+
+    OptixObjects(const OptixObjects&) = delete;
+    OptixObjects& operator=(const OptixObjects&) = delete;
 };
 
 template <typename Data> struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
@@ -55,7 +53,7 @@ void initializeOptix(OptixObjects& objects);
 
 void createPipeline(
     OptixObjects& objects,
-    const std::filesystem::path& ptxPath);
+    const std::filesystem::path& ptxPath, bool instanced = false);
 
 std::vector<ScanPeak> makeScene(
     const std::vector<double>& mzValues,

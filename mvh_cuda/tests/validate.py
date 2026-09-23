@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare CPU and CUDA outputs and timings sequentially in the existing container."""
 import argparse
+import sys
 import csv
 import gzip
 import hashlib
@@ -9,6 +10,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+
+# Locate the shared path policy independently of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shared.output_paths import resolve_output
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,7 +57,7 @@ def archive_identical_psms(output, runs, expected_hash):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path, help='New output directory (default: project output tree)')
     parser.add_argument('--real', action='store_true', help='Use retained E. coli inputs')
     parser.add_argument('--verify-cuda', action='store_true',
                         help='CPU verification mode; not a performance measurement')
@@ -81,7 +86,7 @@ def main():
         data = ROOT / 'mvh_cuda/tests/data'
         spectrum, config, fasta = (data / name for name in
                                    ('sample.ft2', 'search.cfg', 'proteins.fasta'))
-    output = args.output.resolve()
+    output = resolve_output(args.output, "validation", "mvh_cuda", "ecoli" if args.real else "smoke")
     output.mkdir(parents=True, exist_ok=False)
     report = {'inputs': {str(path): digest(path) for path in (spectrum, config, fasta)},
               'verification_mode': args.verify_cuda, 'runs': [], 'all_equal': False}

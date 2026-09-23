@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Container-only exporter for scan 1004 and its validated [LDNM~ATK] PSM."""
 import argparse
+import sys
 import csv
 import gzip
 import hashlib
@@ -8,6 +9,10 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+
+# Locate the shared path policy independently of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shared.output_paths import resolve_output
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,9 +28,9 @@ def sha256(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, default=ROOT / 'build/mvh_rt/bin/export_mvh_sample')
-    parser.add_argument('--output', type=Path, default=ROOT / 'MVH_RT/test_data')
+    parser.add_argument('--output', type=Path, help='New output directory (default: project output tree)')
     args = parser.parse_args()
-    output = args.output.resolve()
+    output = resolve_output(args.output, "exports", "mvh_rt", "scan_1004")
     if output.exists():
         parser.error('Output already exists; choose a new directory')
     spectrum = ROOT / 'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2'
@@ -43,6 +48,7 @@ def main():
             writer = csv.DictWriter(stream, fieldnames=fields, delimiter='\t', lineterminator='\n')
             writer.writeheader()
             writer.writerow(selected)
+        output.parent.mkdir(parents=True, exist_ok=True)
         command = [str(args.binary.resolve()), str(spectrum), str(config), str(psm), str(output)]
         run = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         if output.exists():

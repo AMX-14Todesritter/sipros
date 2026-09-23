@@ -8,6 +8,10 @@ import shutil
 import subprocess
 import sys
 
+# Locate the shared path policy independently of the working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shared.output_paths import resolve_output
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -73,7 +77,7 @@ def main():
     parser.add_argument("--config", type=Path, required=True, help="Regular search configuration")
     parser.add_argument("--fasta", type=Path, required=True)
     parser.add_argument("--scan-id", type=int, help="Default: first preprocessed scan with >=7 raw peaks")
-    parser.add_argument("--output", type=Path, required=True, help="New output directory; refuses overwrite")
+    parser.add_argument("--output", type=Path, help="New output directory (default: project output tree); refuses overwrite")
     parser.add_argument("--jobs", type=int, default=4, help="Compilation jobs (search always uses one thread)")
     args = parser.parse_args()
     for key in ("input", "config", "fasta"):
@@ -87,7 +91,7 @@ def main():
         parser.error("--jobs must be positive")
     if not shutil.which("cmake"):
         parser.error("cmake not found; run inside the project development container")
-    out = args.output.resolve()
+    out = resolve_output(args.output, "exports", "peak_export", args.input.stem)
     out.mkdir(parents=True, exist_ok=False)
     source = prepare(out / "build")
     binary_dir = out / "build/cmake"

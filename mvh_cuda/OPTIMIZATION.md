@@ -1,3 +1,5 @@
+> 历史版本记录。当前 GPU 数据路径与最新验证结果见 [README.md](README.md) 和 [DEVICE_PIPELINE.md](DEVICE_PIPELINE.md)。
+
 # 第一轮主机开销优化
 
 本轮不修改酶切、质量窗口、理论离子公式、匹配条件、评分公式或 GPU top 排序算法。CPU 基准 `mvh/` 和 `original/` 依赖保持不变。优化前源码与可执行文件分别保存在：

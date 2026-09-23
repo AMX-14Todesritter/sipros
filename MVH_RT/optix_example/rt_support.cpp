@@ -34,7 +34,7 @@ void initializeOptix(OptixObjects &objects) {
     OptixDeviceContextOptions options{};
     options.logCallbackFunction = logCallback;
     options.logCallbackLevel = 3;
-    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_OFF;
     checkOptix(optixDeviceContextCreate(nullptr, &options, &objects.context));
 }
 
@@ -86,9 +86,8 @@ std::vector<float3> makeVertices(
 Ray makeRay(double mz, double tolerance)
 {
     Ray ray;
-    ray.origin = make_float3(
-        static_cast<float>(mz), 0.0f, 0.0f
-    );
+
+    ray.origin = make_float3(static_cast<float>(mz), 0.0f, 0.0f);
     ray.mz = mz;
     ray.tmin = 0.0f;
     ray.tmax = static_cast<float>(tolerance);
@@ -117,7 +116,7 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixProgramGro
     return group;
 }
 
-void createPipeline(OptixObjects &objects, const fs::path &ptxPath) {
+void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced) {
     std::ifstream stream(ptxPath, std::ios::binary);
     if (!stream) throw std::runtime_error("Cannot open PTX: " + ptxPath.string());
     const std::string ptx((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
@@ -125,7 +124,8 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath) {
     moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
     OptixPipelineCompileOptions compileOptions{};
-    compileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+    compileOptions.traversableGraphFlags = instanced ? OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
+                                                    : OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     compileOptions.numPayloadValues = 2; // primitive ID and distance bits
     compileOptions.numAttributeValues = 2;
     compileOptions.pipelineLaunchParamsVariableName = "params";
@@ -171,7 +171,7 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath) {
         checkOptix(optixUtilAccumulateStackSizes(group, &sizes, objects.pipeline));
     unsigned int traversal = 0, state = 0, continuation = 0;
     checkOptix(optixUtilComputeStackSizes(&sizes, 1, 0, 0, &traversal, &state, &continuation));
-    checkOptix(optixPipelineSetStackSize(objects.pipeline, traversal, state, continuation, 1));
+    checkOptix(optixPipelineSetStackSize(objects.pipeline, traversal, state, continuation, instanced ? 2 : 1));
 }
 
 //BVH share
@@ -310,4 +310,14 @@ std::vector<RayResult> traceRays(
     checkCuda(cudaDeviceSynchronize());
 
     return results.download();
+}
+
+OptixObjects::~OptixObjects()
+{
+    if (pipeline) optixPipelineDestroy(pipeline);
+    if (hit) optixProgramGroupDestroy(hit);
+    if (miss) optixProgramGroupDestroy(miss);
+    if (raygen) optixProgramGroupDestroy(raygen);
+    if (module) optixModuleDestroy(module);
+    if (context) optixDeviceContextDestroy(context);
 }

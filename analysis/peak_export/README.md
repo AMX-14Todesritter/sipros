@@ -1,5 +1,7 @@
 # 导出一份实验峰和对应候选理论峰
 
+输出路径统一约定见 [OUTPUT_LAYOUT.md](../../OUTPUT_LAYOUT.md)。省略输出参数时自动写入项目 `output/` 下的分类运行目录；已有显式输出路径仍然有效。
+
 本工具只支持 `Search_Type = Regular`，使用当前项目的真实读谱、数据库酶切、质量窗口分配和 `MVH::CalculateSequenceIons()`。
 它不修改原始 `src/`、`include/`、CMake 文件或现有二进制；在输出目录复制源码，注入导出钩子并独立编译。
 

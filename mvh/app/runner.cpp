@@ -37,8 +37,11 @@ void mvh_app::run(const std::string &input, const std::string &config,
     if (ProNovoConfig::getSearchType() != "Regular")
         throw std::runtime_error("Only Search_Type = Regular is supported");
     ProNovoConfig::setFASTAfilename(fasta);
+    // Create category/run parents while preserving exclusive creation of the run itself.
+    const auto parent = std::filesystem::path(output).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent);
     if (!std::filesystem::create_directory(output))
-        throw std::runtime_error("Output directory must not exist; its parent must exist");
+        throw std::runtime_error("Output directory must not already exist");
     std::filesystem::copy_file(config, std::filesystem::path(output)/"input_config.cfg");
     MvhScanVector spectra(input, output, config, true);
     if (!spectra.loadMassData()) throw std::runtime_error("Cannot load spectra");

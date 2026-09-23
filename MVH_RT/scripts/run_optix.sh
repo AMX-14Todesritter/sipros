@@ -4,8 +4,8 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 runtime_dir="$project_root/build/mvh_rt/optix_runtime"
 build_dir="$project_root/build/mvh_rt/optix_example"
-if [[ $# -ne 1 ]]; then
-    echo "Usage (inside existing container): bash MVH_RT/scripts/run_optix.sh NEW_OUTPUT_DIRECTORY" >&2
+if [[ $# -gt 1 ]]; then
+    echo "Usage (inside existing container): bash MVH_RT/scripts/run_optix.sh [NEW_OUTPUT_DIRECTORY]" >&2
     exit 2
 fi
 if [[ ! -f "$runtime_dir/libnvoptix.so.1" ]]; then
@@ -16,6 +16,10 @@ if [[ "${LD_LIBRARY_PATH:-}" == *'/stubs'* ]]; then
     echo "Remove CUDA stubs from runtime LD_LIBRARY_PATH before running this example." >&2
     exit 2
 fi
+output_dir="${1:-$(python3 "$project_root/shared/output_paths.py" examples optix spheres)}"
+# Resolve the example's retained input paths from the project root.
+if [[ "$output_dir" != /* ]]; then output_dir="$PWD/$output_dir"; fi
+cd "$project_root"
 # A command-scoped assignment does not change the caller's environment.
 LD_LIBRARY_PATH="$runtime_dir:/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$build_dir/bin/optix_spheres" "$build_dir/device_programs.ptx" "$1"
+    "$build_dir/bin/optix_spheres" "$build_dir/device_programs.ptx" "$output_dir"

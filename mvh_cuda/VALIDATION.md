@@ -1,3 +1,5 @@
+> 历史版本记录。当前 GPU 数据路径与最新验证结果见 [README.md](README.md) 和 [DEVICE_PIPELINE.md](DEVICE_PIPELINE.md)。
+
 # CUDA 移植验证记录
 
 本文记录首次直接移植版本。后续主机开销优化及当前版本的验证/耗时见 [OPTIMIZATION.md](OPTIMIZATION.md)。

@@ -1,5 +1,7 @@
 # 独立的 MVH 搜索类
 
+输出路径统一约定见 [OUTPUT_LAYOUT.md](../../OUTPUT_LAYOUT.md)。省略输出参数时自动写入项目 `output/` 下的分类运行目录；已有显式输出路径仍然有效。
+
 本目录只有一个入口：读取谱图并预处理，然后运行提取后的 `MvhScanVector::searchDatabaseMvh()`（函数名和函数体保持原样）。没有 A/B 分支、快照加载、GPU 或新增函数 profiling。
 
 ## 目录

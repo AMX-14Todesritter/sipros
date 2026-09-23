@@ -2,9 +2,9 @@
   "git_commit": "aa1ebb7fe180707187a39a39f99ea07c39ac8dae",
   "files": {
     "CLASS_EXTRACTION_VALIDATION.md": "c1eafa0c897c1014e9db871b030ecf7d5c53dd0aa12c5e5fad3a7ad7f3ec80a3",
-    "CMakeLists.txt": "468fcc7afd2e2932bd85e66b10df6391c12101715b51ad549b3c7ae671e6367a",
+    "CMakeLists.txt": "e2f580256968662ad70f259e84e0bbe73de596e01053491640d575c2d644f677",
     "extraction.json": "a1449b8ed0e49a5e0ea6dc5a78b61e83892573506fd79a4a2c2ccdc9fc78b707",
-    "README.md": "d3a53cac3de3103f931420c04c7d4fb779643548cb7143caedde9d880cd963ee",
+    "README.md": "c9e925c4e03556e357ee3914091d129d26eb93e88a871cdf7ea6c38936da2175",
     "VALIDATION.md": "147ea83046771838fc26894f6259c50af4159fd31bc321dedf1349486b6924e4",
     "tests/source_methods.py": "c8d80aadde20ad1ee6e1797e697bf4892951458f8c0d65e99c2aa561a97182be",
     "tests/verify_original.py": "13badd184c4ed6a751f8f6cb9aec907d945b8390179c1790094716ea000ea245",
@@ -17,9 +17,9 @@
     "src/spectrum_input.cpp": "22e72f59084775e282956516b3af490563f3ed7659c3807da26ffe39fae43f95",
     "src/mvh_scan_vector.cpp": "121404f07c163960eebb065485ba8829e6d1aa6e963c19c0cbb729fe738871fa",
     "src/database_search.cpp": "60c12ebe30c4fc33f0eeda55c92b27e4b266c878c0a9f1cc8646b61b75db4e1c",
-    "app/runner.cpp": "fdabee6da4ae920cced82126a62716dcbcd29ea407f09cf80ead76fe0aa77793",
+    "app/runner.cpp": "905975255d715b4ccf0f8bbc1d5d58a375e41c6b7f9ad7d22ead08cea4ead97d",
     "app/runner.h": "cd9a24bc327d6983f69c8ee0be7d41acbc60427ea7a1c00e56534f3b22ceeae6",
-    "app/main.cpp": "a5c1b7475fd0382a6d4f14f39e44542a48de163f0f6536a0a1209524c802e302",
+    "app/main.cpp": "692030914edf6590543b19e88d8be0ef430850ddcb9f80b5e32e5460a31e7f99",
     "original/manifest.json": "2f3a9f961077d9a2cf4e44d190aa152cc7ee829a55fcd33d4ed706416af81f0f",
     "original/include/isotopologue.h": "ad6c4d18d8d36708bb359372130db56177d8915f71d23e13d752e5840a4545a3",
     "original/include/ms2scan.h": "f1f29588a2883ad9b3bbbe0ab9b8a7a386fc4992cae0b542e69a3a1867b01bad",
@@ -45,5 +45,27 @@
     "original/src/tokenvector.cpp": "cad0e7ce52e9113710a1c205f9f74cbdef36b8b4ac80ff5c4c934a7fe2dc0d3e",
     "original/src/isotopologue.cpp": "a4822e728d7faf415ddd6553eacbb9f796cbee418c4e89e8a01fca36a1e0e922",
     "original/src/proteindatabase.cpp": "fe89001102a74eccf0820e588847e7c0c045b90fd57838d839468b2b8808167a"
+  },
+  "runner_whitespace_note": "2026-09-22: accepted the existing single leading-space change before writePsms; no CPU logic changed.",
+  "output_layout_update": {
+    "note": "Unified output defaults and parent directory creation only; CPU scoring sources are unchanged.",
+    "files": {
+      "CMakeLists.txt": {
+        "before": "468fcc7afd2e2932bd85e66b10df6391c12101715b51ad549b3c7ae671e6367a",
+        "after": "e2f580256968662ad70f259e84e0bbe73de596e01053491640d575c2d644f677"
+      },
+      "app/main.cpp": {
+        "before": "a5c1b7475fd0382a6d4f14f39e44542a48de163f0f6536a0a1209524c802e302",
+        "after": "692030914edf6590543b19e88d8be0ef430850ddcb9f80b5e32e5460a31e7f99"
+      },
+      "app/runner.cpp": {
+        "before": "eee37c3e0e3502ac9f1757f2afbd488f2b510ba9495acfd50de8d15fc3197892",
+        "after": "905975255d715b4ccf0f8bbc1d5d58a375e41c6b7f9ad7d22ead08cea4ead97d"
+      },
+      "README.md": {
+        "before": "d3a53cac3de3103f931420c04c7d4fb779643548cb7143caedde9d880cd963ee",
+        "after": "c9e925c4e03556e357ee3914091d129d26eb93e88a871cdf7ea6c38936da2175"
+      }
+    }
   }
 }

@@ -56,7 +56,8 @@ struct IonCounter {
         if(cls>0){++key[cls-1];++matched;}else ++key[cfg.classes];
     }
 };
-__device__ bool CalculateSequenceIons(const char *text,int charge,const Config &cfg,IonCounter &ions){
+template<class IonSink>
+__device__ bool CalculateSequenceIons(const char *text,int charge,const Config &cfg,IonSink &ions){
     int bytes=0,n=0;char seq[MaxLength];double forward[MaxLength],reverse[MaxLength];
     while(text[bytes]){if(alpha(text[bytes])){if(n>=MaxLength)return false;seq[n++]=text[bytes];}++bytes;}
     if(n<cfg.minLength||text[0]!='['||charge<1)return false;
@@ -91,28 +92,116 @@ __device__ bool CalculateSequenceIons(const char *text,int charge,const Config &
     return true;
 }
 __device__ double lnCombin(int n,int k,const double *table){if(n<0||k<0||n<k)return -1;return (table[n]-table[n-k])-table[k];}
-__global__ void scorePeptidesMVH(const Scan *scans,int size,const Candidate *candidates,const char *texts,
-                                const double *peaks,const int *classes,const short *hub,
-                                const double *lnTable,const Top *initial,Top *finalTop,Result *results,Config cfg){
-    int scanId=blockIdx.x*blockDim.x+threadIdx.x;if(scanId>=size)return;
-    const Scan &s=scans[scanId];Top top[TopN];int count=s.topCount;
-    for(int i=0;i<count;++i)top[i]=initial[uint64_t(scanId)*TopN+i];
-    for(int i=0;i<s.candidates;++i){auto ix=s.candidateOffset+i;auto c=candidates[ix];Result r{};
-        if(s.skip){r.status=ResultSkipped;results[ix]=r;continue;}
-        bool merged=false;for(int k=0;k<count;++k)if(top[k].sequenceId==c.sequenceId){merged=true;break;}
-        if(merged){r.status=ResultMerged;results[ix]=r;continue;}
-        IonCounter ions(s,cfg,peaks,classes,hub);
-        if(!CalculateSequenceIons(texts+c.text,c.charge,cfg,ions)){r.status=-1;results[ix]=r;continue;}
-        r.predicted=ions.predicted;r.matched=ions.matched;r.status=ResultInsufficient;
-        if(ions.matched&&ions.matched>=cfg.minMatched){double value=0;
-            for(int k=0;k<=cfg.classes;++k)value+=lnCombin(s.counts[k],ions.key[k],lnTable);
-            value-=lnCombin(s.totalBins,ions.predicted,lnTable);r.score=-value;r.status=ResultScored;
-            if(count<TopN){top[count++]={r.score,c.sequenceId};saveScoreSort(top,count);}
-            else if(r.score>top[TopN-1].score){top[TopN-1]={r.score,c.sequenceId};saveScoreSort(top,count);}
-        }
-        results[ix]=r;
+// Each candidate is independent until merge/top retention. Compute scores in
+// parallel, then apply the original order-dependent decisions in a second pass.
+template<class Counter>
+__device__ Result scoreCandidate(int index,
+    const Scan *scans, const Candidate *candidates, int size,
+    const PeptideInput *peptides, const char *texts, const double *peaks,
+    const int *classes, const short *hub, const double *lnTable,
+    Result *results, Config cfg,
+    const uint64_t *ionOffsets, const int *ionValid, const double *cachedIons,
+    int chargeStride) {
+    const auto candidate = candidates[index];
+    const Scan &scan = scans[candidate.scanId];
+    Result result{};
+    if (scan.skip) { return result; }
+    Counter ions(scan, cfg, peaks, classes, hub);
+    bool valid;
+    if (chargeStride && candidate.charge < chargeStride) {
+        const uint64_t key = uint64_t(candidate.peptideId) * chargeStride + candidate.charge;
+        valid = ionValid[key] > 0;
+        for (uint64_t i = ionOffsets[key]; valid && i < ionOffsets[key + 1]; ++i)
+            ions.add(cachedIons[i]);
+    } else {
+        valid = CalculateSequenceIons(texts + peptides[candidate.peptideId].text,
+                                      candidate.charge, cfg, ions);
     }
-    for(int k=0;k<count;++k)finalTop[uint64_t(scanId)*TopN+k]=top[k];
+    if (!valid) { result.status = -1; return result; }
+    result.predicted = ions.predicted;
+    result.matched = ions.matched;
+    result.status = ResultInsufficient;
+    if (ions.matched && ions.matched >= cfg.minMatched) {
+        double value = 0;
+        for (int k = 0; k <= cfg.classes; ++k)
+            value += lnCombin(scan.counts[k], ions.key[k], lnTable);
+        value -= lnCombin(scan.totalBins, ions.predicted, lnTable);
+        result.score = -value;
+        result.status = ResultScored;
+    }
+    return result;
+}
+
+#ifndef MVH_OPTIX_DEVICE
+__global__ void ScoreSequenceVsSpectrum(
+    const Scan *scans, const Candidate *candidates, int size,
+    const PeptideInput *peptides, const char *texts, const double *peaks,
+    const int *classes, const short *hub, const double *lnTable,
+    Result *results, Config cfg,
+    const uint64_t *ionOffsets, const int *ionValid, const double *cachedIons,
+    int chargeStride) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < size)
+        results[index] = scoreCandidate<IonCounter>(index, scans, candidates, size,
+            peptides, texts, peaks, classes, hub, lnTable, results, cfg,
+            ionOffsets, ionValid, cachedIons, chargeStride);
+}
+
+__global__ void scorePeptidesMVH(const Scan *scans, int size,
+                                const Candidate *candidates, const PeptideInput *peptides,
+                                const Top *initial, Top *finalTop, Result *results,
+                                ScanCounts *counts) {
+    const int scanId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (scanId >= size) return;
+    const Scan &scan = scans[scanId];
+    Top top[TopN];
+    int count = scan.topCount;
+    ScanCounts stats{};
+    for (int k = 0; k < count; ++k) top[k] = initial[uint64_t(scanId) * TopN + k];
+    for (int i = 0; i < scan.candidates && !scan.skip; ++i) {
+        const uint64_t index = scan.candidateOffset + i;
+        auto &result = results[index];
+        const int sequenceId = peptides[candidates[index].peptideId].sequenceId;
+        bool merged = false;
+        for (int k = 0; k < count; ++k)
+            if (top[k].sequenceId == sequenceId) { merged = true; break; }
+        // A speculative score must not affect a candidate the CPU would merge.
+        if (merged) { result = {}; result.status = ResultMerged; continue; }
+        if (result.status < 0) { stats.error = 1; continue; }
+        ++stats.calls;
+        stats.predicted += result.predicted;
+        stats.matched += result.matched;
+        if (result.status != ResultScored) continue;
+        ++stats.successes;
+        if (count < TopN) {
+            top[count++] = {result.score, sequenceId};
+        } else if (result.score > top[TopN - 1].score) {
+            top[TopN - 1] = {result.score, sequenceId};
+        } else continue;
+        result.status = ResultAccepted;
+        saveScoreSort(top, count);
+    }
+    stats.topCount = count;
+    counts[scanId] = stats;
+    for (int k = 0; k < count; ++k) finalTop[uint64_t(scanId) * TopN + k] = top[k];
+}
+
+// Only state-changing events cross back to the CPU in normal mode. Stable
+// compaction preserves protein-name merges and the original top-list history.
+struct KeepEveryCandidate {
+    __device__ bool operator()(int) const { return true; }
+};
+struct KeepScoringEvent {
+    const Result *results;
+    __device__ bool operator()(int index) const {
+        return results[index].status == ResultMerged || results[index].status == ResultAccepted;
+    }
+};
+__global__ void gatherScoringEvents(const int *indices, int size,
+                                   const Candidate *candidates, const Result *results,
+                                   ScoringEvent *events) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < size) events[i] = {candidates[indices[i]], results[indices[i]]};
 }
 __global__ void sortTest(Top *data,int count){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<count)saveScoreSort(data+uint64_t(i)*TopN,TopN);}
 }
@@ -122,3 +211,7 @@ __global__ void matchContract(Scan scan,const double *peaks,const int *classes,c
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<n)out[i]=findNear(queries[i],tolerances[i],scan,peaks,classes,hub);
 }
 }
+
+#else
+} // namespace mvh_cuda
+#endif

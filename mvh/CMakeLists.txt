@@ -36,6 +36,8 @@ else()
   target_compile_definitions(mvh_original PUBLIC GCC _FILE_OFFSET_BITS=64 _NOSQLITE)
 endif()
 add_executable(sipros_mvh app/main.cpp app/runner.cpp)
+target_include_directories(sipros_mvh PRIVATE "${SIPROS_ROOT}/shared")
+target_compile_definitions(sipros_mvh PRIVATE SIPROS_PROJECT_ROOT="${SIPROS_ROOT}")
 target_link_libraries(sipros_mvh PRIVATE mvh_original)
 set_target_properties(sipros_mvh PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 enable_testing()
@@ -48,3 +50,8 @@ add_test(NAME mvh_cli_and_sample
 
 add_test(NAME mvh_extracted_methods_identity
   COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_extraction.py")
+
+# Check default paths and explicit overrides against a real sample search.
+add_test(NAME output_directory_contract
+  COMMAND ${Python3_EXECUTABLE} -B "${SIPROS_ROOT}/shared/tests/check_output_paths.py"
+          --binary $<TARGET_FILE:sipros_mvh> --component mvh)

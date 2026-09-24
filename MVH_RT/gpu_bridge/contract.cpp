@@ -4,7 +4,10 @@
 #include <stdexcept>
 
 int main(int argc,char **argv) {
-    const bool instanced=argc>1;
+    const std::string mode = argc > 1 ? argv[1] : "triangle";
+    const bool custom = mode == "custom";
+    const auto geometry = custom ? mvh_rt_gpu::GeometryKind::Spheres :
+        mode == "instanced" ? mvh_rt_gpu::GeometryKind::InstancedTriangles : mvh_rt_gpu::GeometryKind::Triangles;
     using namespace mvh_cuda;
     try {
         Config cfg{}; cfg.classes=3; cfg.minMatched=1; cfg.fragmentTolerance=0.01;
@@ -31,11 +34,12 @@ int main(int argc,char **argv) {
         p.cfg=cfg;p.ionOffsets=offsets.p;p.ionValid=valid.p;p.cachedIons=ions.p;
         p.size=3;p.chargeStride=2;
         for(int repeat=0;repeat<2;++repeat) {
-            mvh_rt_gpu::prepare(hostScans,scans.p,peaks.p,peaks.n,instanced);
+            mvh_rt_gpu::prepare(hostScans,scans.p,peaks.p,classes.p,peaks.n,geometry,cfg);
             mvh_rt_gpu::launch(p); synced();
             std::vector<Result> got;results.read(got);
-            if(got[0].predicted!=1 || got[0].matched!=0 || got[0].status!=ResultInsufficient)
-                throw std::runtime_error("Known float-zero baseline behavior changed");
+            if(got[0].predicted!=1 || got[0].matched!=(custom ? 1 : 0) ||
+               got[0].status!=(custom ? ResultScored : ResultInsufficient))
+                throw std::runtime_error("Float-zero query did not follow the selected backend contract");
             for(int i=1;i<3;++i)
                 if(got[i].predicted!=1 || got[i].matched!=1 || got[i].status!=ResultScored)
                     throw std::runtime_error("Nonzero query failed");
@@ -45,14 +49,14 @@ int main(int argc,char **argv) {
         cfg.mass['A']=71;cfg.fragmentTolerance=0.01;
         mvh_rt_gpu::reset();hostPeaks={72.001};
         check(cudaMemcpy(peaks.p,hostPeaks.data(),sizeof(double),cudaMemcpyHostToDevice));
-        mvh_rt_gpu::prepare(hostScans,scans.p,peaks.p,peaks.n,instanced);
+        mvh_rt_gpu::prepare(hostScans,scans.p,peaks.p,classes.p,peaks.n,geometry,cfg);
         p.cfg=cfg;p.size=1;p.chargeStride=0;p.ionOffsets=nullptr;p.ionValid=nullptr;p.cachedIons=nullptr;
         mvh_rt_gpu::launch(p);synced();
         std::vector<Result> got;results.read(got);
         if(got[0].predicted!=3 || got[0].matched!=1 || got[0].status!=ResultScored)
             throw std::runtime_error("Uncached theory/RT scoring failed");
         mvh_rt_gpu::reset();
-        std::cout << "PASS: cached/direct theory, reused GAS, known zero miss, nonzero matches\n";
+        std::cout << "PASS: cached/direct theory, reused GAS, backend-specific zero-distance behavior, nonzero matches\n";
         return 0;
     } catch(const std::exception &e) {
         mvh_rt_gpu::reset(); std::cerr<<e.what()<<'\n';return 1;

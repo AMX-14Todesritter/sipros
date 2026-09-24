@@ -3,6 +3,8 @@
 #include <optix.h>
 
 namespace mvh_rt_gpu {
+enum class GeometryKind { Triangles, InstancedTriangles, Spheres };
+
 struct Params {
     const mvh_cuda::Scan *scans;
     const mvh_cuda::Candidate *candidates;
@@ -19,11 +21,18 @@ struct Params {
     const double *cachedIons;
     const OptixTraversableHandle *handles;
     int size, chargeStride, instanced;
+    float rayOriginY;
+    float rayTmax;
 };
 // Resources persist across peptide batches and reset for each input dataset.
 void reset();
-void prepare(const std::vector<mvh_cuda::Scan>& scans,
-             const mvh_cuda::Scan *deviceScans, const double *devicePeaks,
-             size_t peakCount, bool instanced = false);
+void prepare(
+    const std::vector<mvh_cuda::Scan>& scans,
+    const mvh_cuda::Scan* deviceScans,
+    const double* devicePeaks,
+    const int* deviceClasses,
+    size_t peakCount,
+    GeometryKind geometry,
+    const mvh_cuda::Config& config);
 void launch(Params params);
 }

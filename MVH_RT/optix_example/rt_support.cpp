@@ -116,7 +116,8 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixProgramGro
     return group;
 }
 
-void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced) {
+void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced, PrimitiveKind primitive) {
+    const bool spheres = primitive == PrimitiveKind::Sphere;
     std::ifstream stream(ptxPath, std::ios::binary);
     if (!stream) throw std::runtime_error("Cannot open PTX: " + ptxPath.string());
     const std::string ptx((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
@@ -126,10 +127,11 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
     OptixPipelineCompileOptions compileOptions{};
     compileOptions.traversableGraphFlags = instanced ? OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
                                                     : OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    compileOptions.numPayloadValues = 2; // primitive ID and distance bits
+    compileOptions.numPayloadValues = 2; // Peak index and optional distance; sphere uses the first slot.
     compileOptions.numAttributeValues = 2;
     compileOptions.pipelineLaunchParamsVariableName = "params";
-    compileOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+    compileOptions.usesPrimitiveTypeFlags = spheres ? OPTIX_PRIMITIVE_TYPE_FLAGS_SPHERE
+                                                   : OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
     char log[4096]{};
     size_t logSize = sizeof(log);
     auto result = optixModuleCreate(objects.context, &moduleOptions, &compileOptions,
@@ -149,11 +151,19 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
     objects.miss = createProgramGroup(objects.context, description);
     description = {};
     description.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    description.hitgroup.moduleIS = nullptr; // No built-in intersection program for our custom primitive.
+    if (spheres) {
+        // Built-in spheres use OptiX's intersector, not a user-written IS.
+        // Keep these build flags consistent with bridge.cpp's GAS options.
+        OptixBuiltinISOptions builtinOptions{};
+        builtinOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_SPHERE;
+        builtinOptions.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
+        checkOptix(optixBuiltinISModuleGet(objects.context, &moduleOptions,
+            &compileOptions, &builtinOptions, &objects.sphereIntersection));
+    }
+    description.hitgroup.moduleIS = objects.sphereIntersection;
     description.hitgroup.entryFunctionNameIS = nullptr;
     description.hitgroup.moduleCH = objects.module;
     description.hitgroup.entryFunctionNameCH = "__closesthit__record";
-    // No any-hit program: this lesson needs only the nearest opaque surface.
     objects.hit = createProgramGroup(objects.context, description);
 
     OptixProgramGroup groups[] = {objects.raygen, objects.miss, objects.hit};
@@ -318,6 +328,7 @@ OptixObjects::~OptixObjects()
     if (hit) optixProgramGroupDestroy(hit);
     if (miss) optixProgramGroupDestroy(miss);
     if (raygen) optixProgramGroupDestroy(raygen);
+    if (sphereIntersection) optixModuleDestroy(sphereIntersection);
     if (module) optixModuleDestroy(module);
     if (context) optixDeviceContextDestroy(context);
 }

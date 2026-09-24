@@ -27,10 +27,10 @@ def write_report(directory):
     hashes = {k: {x['psm_sha256'] for x in r['runs'] if x['backend']==k and x['exit_code']==0}
               for k in {x['backend'] for x in r['runs']}}
     lines += ['', '## Output comparisons', '']
-    for left, right in [('cpu','cuda'), ('cuda','rt-triangle'), ('cuda','rt-instanced'), ('rt-triangle','rt-instanced')]:
+    for left, right in [('cpu','cuda'), ('cuda','rt-triangle'), ('cuda','rt-instanced'), ('rt-triangle','rt-instanced'), ('cuda','rt-custom'), ('rt-triangle','rt-custom')]:
         if hashes.get(left) and hashes.get(right):
             lines.append(f'- {left} / {right}: ' + ('identical' if len(hashes[left] | hashes[right]) == 1 else 'different'))
-    lines += ['', 'RT still has known float-zero/boundary differences. PSM row differences are not an accuracy percentage. A different output does not automatically fail the performance run.', '',
+    lines += ['', 'The legacy triangle RT backends have known float-zero/boundary differences; evaluate rt-custom with the score-impact validation script. PSM row differences are not an accuracy percentage. A different output does not automatically fail the performance run.', '',
               'Raw commands, hashes, per-batch timings and memory metrics: report.json. Build/test records and source/configuration snapshot: parent directory when using run_benchmark.sh.', '']
     (directory / 'REPORT.md').write_text('\n'.join(lines))
 

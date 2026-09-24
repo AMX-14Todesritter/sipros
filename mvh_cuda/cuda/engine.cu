@@ -127,8 +127,9 @@ void same(double a,double b,const std::string &name){require(a==b,name+" differs
 }
 void setVerification(bool enabled){verification=enabled;}
 void setScoreImpact(bool enabled) {
-    require(!enabled || matchBackend == "rt-triangle" || matchBackend == "rt-instanced",
-            "--score-impact requires rt-triangle or rt-instanced");
+    require(!enabled || matchBackend == "rt-triangle" || matchBackend == "rt-instanced" ||
+            matchBackend == "rt-custom",
+            "--score-impact requires rt-triangle, rt-instanced or rt-custom");
     scoreImpactEnabled = enabled;
 }
 void startScoreImpact(const std::string &outputDirectory) {
@@ -144,12 +145,13 @@ MatchBackendScope::~MatchBackendScope() {
 }
 const std::string &matchBackendName() { return matchBackend; }
 void setMatchBackend(const std::string &name) {
-    require(name=="cuda" || name=="rt-triangle" || name=="rt-audit" || name=="rt-instanced", "Unknown match backend");
+    require(name=="cuda" || name=="rt-triangle" || name=="rt-audit" || name=="rt-instanced" || name=="rt-custom", "Unknown match backend");
 #ifndef MVH_CUDA_ENABLE_RT
     require(name=="cuda", "RT backend was not enabled at build time");
 #endif
     matchBackend=name;
-    if (name!="cuda") std::cout << "[RT backend] " << name
+    if (name=="rt-custom") std::cout << "[RT backend] rt-custom; built-in spheres at (mz, class, 0); higher class number first\n";
+    else if (name!="cuda") std::cout << "[RT backend] " << name
         << "; experimental unshifted triangles; known zero-distance/boundary differences\n";
 }
 void setPeptideBatchSize(int size) { require(size > 0, "batch size must be positive"); batchSize = size; }
@@ -521,8 +523,17 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     synced();
     output.allocationAndUploadSeconds = now() - uploadStart;
 #ifdef MVH_CUDA_ENABLE_RT
-    if (matchBackend!="cuda")
-        mvh_rt_gpu::prepare(batch.scans,scans.p,peaks.p,peaks.n,matchBackend=="rt-instanced");
+    if (matchBackend!="cuda") {
+        using mvh_rt_gpu::GeometryKind;
+        const auto geometry =
+            matchBackend == "rt-custom" ? GeometryKind::Spheres :
+            matchBackend == "rt-instanced" ? GeometryKind::InstancedTriangles :
+                                            GeometryKind::Triangles;
+
+        mvh_rt_gpu::prepare(
+            batch.scans, scans.p, peaks.p, classes.p,
+            peaks.n, geometry, config);
+            }
 #endif
 
     const double theoryStart = now();

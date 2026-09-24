@@ -24,7 +24,7 @@ p.add_argument('--batch', type=int, default=4000000)
 p.add_argument('--scans', type=Path)
 p.add_argument('--config', type=Path)
 p.add_argument('--fasta', type=Path, help='FASTA override; default is raw/Ecoli.fasta')
-p.add_argument('--backends', nargs='+', choices=['cpu', 'cuda', 'rt-triangle', 'rt-instanced'],
+p.add_argument('--backends', nargs='+', choices=['cpu', 'cuda', 'rt-triangle', 'rt-instanced', 'rt-custom'],
                default=['cpu', 'cuda', 'rt-triangle'])
 p.add_argument('--repeats', type=int, default=3)
 a = p.parse_args()

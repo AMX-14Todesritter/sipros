@@ -18,7 +18,13 @@ sys.path.insert(0, str(ROOT))
 from shared.output_paths import resolve_output
 from score_impact_report import analyze
 
-BACKENDS = ('rt-triangle', 'rt-instanced')
+BACKENDS = ('rt-triangle', 'rt-instanced', 'rt-custom')
+MATCHING_RULES = {
+    'cuda': 'double nearest-mass bucket reference',
+    'rt-triangle': 'legacy float triangle nearest-mass search',
+    'rt-instanced': 'legacy float instanced-triangle nearest-mass search',
+    'rt-custom': 'built-in spheres at (mz, raw class, 0); descending-class closest-hit',
+}
 
 
 def digest(path):
@@ -97,7 +103,9 @@ def write_reports(output, manifest, tolerance, repeat=False):
     lines = ['# RT 对 MVH 分数及最终候选筛选的影响', '',
              f'输入：{total_scans:,} 个 scan；FASTA：`{manifest["inputs"]["fasta"]}`。',
              f'同分判定容差：{tolerance:g} MVH 分数单位。原始分数差异另外按精确不等统计。', '',
-             '参照为 CUDA 桶匹配，不是生物学真值。下表衡量计算结果变化，不是逐 peak 准确率。', '',
+             '参照为 CUDA 桶匹配，不是生物学真值。下表衡量计算结果变化，不是逐 peak 准确率。',
+             '后端匹配规则：' + json.dumps(manifest.get('matching_rules', {}), ensure_ascii=False),
+             '若规则不同，分数/筛选差异同时包含规则变化与数值误差，不能直接视为精度错误。未记录规则的历史运行需结合当时源码解释。', '',
              '## 最终筛选', '',
              '| RT 后端 | top-1 肽段改变 / 全部 scan | top-1 完整假设改变 | top-N 成员改变 | 成员相同但重新排序 | top-1 仅同分顺序变化 |',
              '|---|---:|---:|---:|---:|---:|']
@@ -186,6 +194,10 @@ def main():
     manifest = {'inputs': {name: str(path) for name,path in inputs.items()},
                 'input_sha256': {name: digest(path) for name,path in inputs.items()},
                 'binary': str(binary), 'binary_sha256': digest(binary),
+                'matching_rules': {name: MATCHING_RULES[name] for name in ['cuda', *args.backends]},
+                'ptx_sha256': {str(path): digest(path) for path in (
+                    binary.parent.parent/'gpu_rt.ptx', binary.parent.parent/'gpu_rt_custom.ptx')
+                    if path.is_file()},
                 'backends': args.backends, 'score_tolerance': args.score_tolerance,
                 'peptide_batch_size': args.peptide_batch_size, 'runs': {}, 'searches_complete': False}
     environment = dict(os.environ, LD_LIBRARY_PATH=str(ROOT/'build/mvh_rt/optix_runtime')+':/usr/local/cuda/lib64')

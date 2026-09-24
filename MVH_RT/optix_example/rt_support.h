@@ -33,6 +33,7 @@ public:
 struct OptixObjects {
     OptixDeviceContext context = nullptr;
     OptixModule module = nullptr;
+    OptixModule sphereIntersection = nullptr;
     OptixProgramGroup raygen = nullptr, miss = nullptr, hit = nullptr;
     OptixPipeline pipeline = nullptr;
 
@@ -51,9 +52,12 @@ struct EmptyData { int unused = 0; };
 
 void initializeOptix(OptixObjects& objects);
 
+enum class PrimitiveKind { Triangle, Sphere };
+
 void createPipeline(
     OptixObjects& objects,
-    const std::filesystem::path& ptxPath, bool instanced = false);
+    const std::filesystem::path& ptxPath, bool instanced = false,
+    PrimitiveKind primitive = PrimitiveKind::Triangle);
 
 std::vector<ScanPeak> makeScene(
     const std::vector<double>& mzValues,

@@ -16,8 +16,12 @@ with tempfile.TemporaryDirectory(prefix='score-impact-check-') as temporary:
                     '--binary', str(args.binary), '--peptide-batch-size', '3',
                     '--output', str(output)], check=True)
     reports = json.loads((output / 'analysis/summary.json').read_text())
-    for report in reports.values():
+    for backend, report in reports.items():
         assert report['candidate_occurrences']['candidates'] > 0
+        if backend == 'rt-custom':
+            # The runner already checks normal/diagnostic PSM identity.
+            # Differences from the old CUDA rule are allowed for spheres.
+            continue
         assert report['candidate_occurrences']['score_changed'] == 0
         assert report['final_selection']['top1_peptide_changed_scans'] == 0
         assert report['final_selection']['topn_membership_changed_scans'] == 0

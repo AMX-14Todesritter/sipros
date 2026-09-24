@@ -17,8 +17,8 @@ p.add_argument('--scans', type=Path, help='Override dataset FT2')
 p.add_argument('--config', type=Path, help='Override dataset configuration')
 p.add_argument('--batch', type=int, default=4000000)
 p.add_argument('--repeats', type=int, default=1)
-p.add_argument('--backends', nargs='+', choices=['cpu','cuda','rt-triangle','rt-instanced'],
-               default=['cpu','cuda','rt-triangle','rt-instanced'])
+p.add_argument('--backends', nargs='+', choices=['cpu','cuda','rt-triangle','rt-instanced','rt-custom'],
+               default=['cpu','cuda','rt-triangle','rt-instanced','rt-custom'])
 p.add_argument('--output', type=Path, help='New directory inside container')
 p.add_argument('--skip-build', action='store_true')
 p.add_argument('--skip-tests', action='store_true')

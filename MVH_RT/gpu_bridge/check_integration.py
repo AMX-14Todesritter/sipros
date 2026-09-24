@@ -53,12 +53,23 @@ def main():
                         assert differences and all(int(value) == 0 for value in differences), log
         assert len(set(outputs)) == 1, "Sample PSMs differ by backend, verification, or batch size"
 
+        # Sphere matching uses a different class-priority rule. Compare its
+        # batches to itself, not to the original nearest-mass scoring rule.
+        sphere_outputs = []
+        for batch in (2000000, 3):
+            output, log = run(f"sphere_{batch}", "rt-custom", False, batch)
+            sphere_outputs.append((output / "mvh_psms.tsv").read_bytes())
+            assert all(count == 0 for count in bucket_entries(log, "host_bucket_entries")), log
+            assert all(count == 0 for count in bucket_entries(log, "device_bucket_entries")), log
+            assert log.count("[RT GPU setup]") == 1, log
+        assert len(set(sphere_outputs)) == 1, "Sphere outputs changed with batch size"
+
         # Exercise an empty pre-index peak map: no PeakList may be dereferenced.
         skipped = root / "skipped.ft2"
         lines = (data / "sample.ft2").read_text().splitlines()
         headers = [line for line in lines if line and not line[0].isdigit()]
         skipped.write_text("\n".join(headers) + "\n100.0\t1000.0\n")
-        for mode in ("rt-triangle", "rt-instanced"):
+        for mode in ("rt-triangle", "rt-instanced", "rt-custom"):
             output, log = run(f"{mode}_skipped", mode, False, 3, skipped)
             assert bucket_entries(log, "host_bucket_entries") == [0], log
             with (output / "run_summary.tsv").open() as stream:

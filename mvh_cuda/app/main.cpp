@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;

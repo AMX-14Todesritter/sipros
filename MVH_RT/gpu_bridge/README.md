@@ -198,8 +198,20 @@ docker exec sipros-sipros-1 python3 -B MVH_RT/gpu_bridge/validate_score_impact.p
 - 诊断搜索最终 PSM 必须与相应的 RT 正常搜索逐字节一致；不满足则终止分析。最终筛选变化的 scan 必须能找到候选分数或资格变化，避免遗漏诊断数据时给出结论。
 - 候选统计包含重复及随后可能被合并的候选。与最终筛选的关联在 scan 层进行，不宣称某个重复实例单独导致了结果变化，也不将 CUDA 参照等同于生物学鉴定真值。
 
-底层 `--score-impact` 仅允许 `rt-triangle` / `rt-instanced`；诊断模式需要临时恢复 CUDA 桶及额外 CUDA 评分结果，故不能用来测 RT 省桶性能。普通搜索不启用该选项，仍走原先的省桶路径。内核/写出实现放在独立 `mvh_cuda/cuda/score_impact.*`，分析与调度分别位于 `score_impact_report.py` 和 `validate_score_impact.py`。
+底层 `--score-impact` 仅允许 `rt-triangle` / `rt-instanced` / `rt-custom`；诊断模式需要临时恢复 CUDA 桶及额外 CUDA 评分结果，故不能用来测 RT 省桶性能。普通搜索不启用该选项，仍走原先的省桶路径。内核/写出实现放在独立 `mvh_cuda/cuda/score_impact.*`，分析与调度分别位于 `score_impact_report.py` 和 `validate_score_impact.py`。
 
 默认将本次生成的 PSM 压缩并校验解压哈希后移除明文副本；`--keep-psms` 可保留明文。`--analyze-only` 同时支持两种形式。
 
 完整 E. coli 验证（46,066 个 scan）：两种 RT 后端结果一致；与 CUDA 相比，30,737 个双方可评分的候选出现实例分数改变，42,341 个实例失去评分资格；627 个 scan 的 top-1 肽段改变（其中 114 个为同分集合内换序），12,879 个 scan 的最终 top-N 成员改变。诊断与正常 RT 搜索的最终 PSM 逐字节相同。分数分布、完整分母及明细说明见 [验证报告](../../output/validation/score_impact/ecoli_20260923T184046_786090Z/analysis/REPORT.md)。
+
+## 独立实验后端 rt-custom
+
+`rt-custom` 当前为内置 sphere 基础框架：球心 `(m/z, class, 0)`，半径取质量容差，从上方向下发射并选择 closest-hit。class 不反转，编号较大的组优先；class 0 不在几何阶段过滤，但现有评分仍不把它作为有效评分组。
+
+原有 `rt-triangle` / `rt-instanced` 保留作旧算法对照，默认后端仍为 CUDA。新规则不要求与旧 CUDA/三角形输出相同；正常与诊断运行、同一后端的批次一致性仍须通过检查。旧 AABB 版本的零差异报告不适用于当前 sphere 实现。
+
+普通新后端继续省略桶索引。`validate_score_impact.py` 可用 `--backends rt-custom` 单独比较新旧规则，性能脚本同样支持该选项。
+
+人工设计入口、资源复用约定和验证命令见 [CUSTOM_MATCHING.md](CUSTOM_MATCHING.md)。
+
+Sphere 场景资源与构建已独立到 `sphere_backend.cpp`；旧三角形场景在 `triangle_backend.cpp`。`bridge.cpp` 只分发后端，公共 GAS/SBT/上传逻辑在 `scene_resources.cpp`。射线设计继续修改 `custom_device.cu`。

@@ -119,3 +119,5 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 纯 RT 模式会跳过查找桶的构建和上传；CUDA/audit 保留原桶路径。CPU 复算需要主机桶，但纯 RT 不再上传它。实现、日志字段与验证说明见 [RT 桶索引策略](../MVH_RT/gpu_bridge/README.md#rt-路径跳过桶索引)。
 
 需要量化 RT 对 MVH 分数及最终 top 候选的影响时，使用 [评分影响验证脚本](../MVH_RT/gpu_bridge/README.md#用-mvh-分数和最终-top-候选评估差异)。`--score-impact` 为显式诊断开关，默认关闭，诊断耗时不作性能指标。
+
+实验 RT 构建可选 `--match-backend rt-custom`，当前采用 `(m/z, 原始 class, 0)` 内置 sphere 和向下 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。

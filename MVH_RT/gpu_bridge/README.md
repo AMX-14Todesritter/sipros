@@ -83,8 +83,8 @@ docker exec sipros-sipros-1 env \
   原始记录：`MVH_RT/runs/gpu_bridge_8scan_ukjd12oy/`。
 
 本轮没有重新启动已停止的全量审计，也没有声称性能加速。
-`[RT GPU setup]` 单列构建和初始化时间，但它也包含在外层 gpu_service/search 时间中，
-不可重复相加。audit 的 kernel_seconds 包含两种评分、比较和相关等待，不能当成纯 RT 时间。
+历史日志中的 RT setup 时间包含在外层 gpu_service/search 时间中，不可重复相加；
+历史 audit 的 kernel_seconds 也不能当成纯 RT 时间。当前纯净版本已移除这些细分计时。
 不同验证开关下的运行时间不可直接用于后端性能比较。
 
 ## 完整数据性能对照（400 万批次）
@@ -216,11 +216,13 @@ docker exec sipros-sipros-1 python3 -B MVH_RT/gpu_bridge/validate_score_impact.p
 
 Sphere 场景资源与构建已独立到 `sphere_backend.cpp`；旧三角形场景在 `triangle_backend.cpp`。`bridge.cpp` 只分发后端，公共 GAS/SBT/上传逻辑在 `scene_resources.cpp`。射线设计继续修改 `custom_device.cu`。
 
-### Parameterized NSYS / NCU profiling
+### Clean build timing
 
-Run `bash MVH_RT/gpu_bridge/run_profile.sh --dataset marine --batch 6000000`
-from WSL. Defaults to sphere, a complete NSYS timeline followed by one NCU
-scoring launch with early termination. Use `--tools nsys`, `--tools ncu`,
-`--ncu-launch-skip`, `--ncu-launch-count`, or `--dry-run` as needed.
-See [profiling instructions](../../mvh_cuda/PROFILING.md) for parameters and
-limitations. This script uses the separate `profile_enabled` binary.
+This branch removes NVTX and fine-grained CPU/GPU timers. Normal search,
+benchmark and validation commands remain available. Overall search time and
+configuration-through-export total time are reported after the calculation.
+Benchmark reports show unavailable scoring/RT setup timings as `—`, not zero.
+
+The dedicated `run_profile.sh` / `profile.py` entry points belong on the profiling
+branch and have been removed here. Rebuild the normal binary before measuring;
+see the [timing and build contract](../../mvh_cuda/PROFILING.md).

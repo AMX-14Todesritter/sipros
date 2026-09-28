@@ -40,16 +40,13 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
         return;
     }
 
-    const auto start = SetupClock::now();
     auto next = std::make_unique<SphereState>();
     next->scene.layout = scans;
     next->fragmentTolerance = config.fragmentTolerance;
     next->classCount = config.classes;
     initializeOptix(next->scene.objects);
     createPipeline(next->scene.objects, MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
-    const double pipelineSeconds = setupSeconds(start);
 
-    const auto geometryStart = SetupClock::now();
     const float radius = static_cast<float>(config.fragmentTolerance);
     next->centers = std::make_unique<DeviceBuffer<float3>>(peakCount);
     next->radius = std::make_unique<DeviceBuffer<float>>(std::vector<float>{radius});
@@ -58,7 +55,6 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     next->rayOriginY = float(config.classes) + radius + 1.0f;
     next->rayTmax = next->rayOriginY + radius + 1.0f;
     checkCuda(cudaDeviceSynchronize());
-    const double geometrySeconds = setupSeconds(geometryStart);
 
     OptixAccelBuildOptions options{};
     options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -68,7 +64,6 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     std::vector<CUdeviceptr> centerAddresses(scans.size());
     // Build inputs reference these host addresses until scene.build completes.
     CUdeviceptr radiusAddress = next->radius->address();
-    const auto sizingStart = SetupClock::now();
     for (size_t i = 0; i < scans.size(); ++i) {
         const auto& scan = scans[i];
         if (scan.skip || !scan.peaks) continue;
@@ -84,15 +79,12 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
         input.flags = &flags;
         input.numSbtRecords = 1;
     }
-    const double inputSeconds = setupSeconds(sizingStart);
     const auto stats = next->scene.build(inputs, options);
     next->scene.initializeSbt();
     state = std::move(next);
-    std::cout << "[RT GPU setup] scans=" << scans.size() << " seconds=" << setupSeconds(start)
+    std::cout << "[RT GPU setup] scans=" << scans.size()
               << " geometry=class-positioned-spheres active_scans=" << stats.activeScans
-              << " pipeline_seconds=" << pipelineSeconds << " geometry_seconds=" << geometrySeconds
-              << " sizing_seconds=" << inputSeconds + stats.sizingSeconds
-              << " build_seconds=" << stats.buildSeconds << " as_bytes=" << stats.outputBytes
+              << " as_bytes=" << stats.outputBytes
               << " scratch_bytes=" << stats.scratchBytes
               << " geometry_bytes=" << peakCount * sizeof(float3) + sizeof(float)
               << " instance_bytes=" << sizeof(OptixInstance) << '\n';

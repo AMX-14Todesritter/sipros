@@ -66,15 +66,12 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
             throw std::runtime_error("Triangle RT mode changed without reset");
         return;
     }
-    const auto start = SetupClock::now();
     auto next = std::make_unique<TriangleState>();
     next->instanced = instanced;
     next->scene.layout = scans;
     initializeOptix(next->scene.objects);
     createPipeline(next->scene.objects, MVH_GPU_RT_PTX_PATH, instanced);
-    const double pipelineSeconds = setupSeconds(start);
 
-    const auto geometryStart = SetupClock::now();
     OptixAccelBuildOptions options{};
     options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
     options.operation = OPTIX_BUILD_OPERATION_BUILD;
@@ -86,9 +83,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
         generateVertices(peaks, next->vertices->data, peakCount);
     }
     checkCuda(cudaDeviceSynchronize());
-    const double geometrySeconds = setupSeconds(geometryStart);
 
-    const auto sizingStart = SetupClock::now();
     std::vector<OptixBuildInput> inputs(scans.size());
     std::vector<CUdeviceptr> addresses(scans.size());
     for (size_t i = 0; i < scans.size(); ++i) {
@@ -103,16 +98,13 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
             inputs[i] = triangleInput(&addresses[i], scan.peaks * 3, &flags);
         }
     }
-    const double inputSeconds = setupSeconds(sizingStart);
     const auto stats = next->scene.build(inputs, options);
     next->scene.initializeSbt();
     state = std::move(next);
-    std::cout << "[RT GPU setup] scans=" << scans.size() << " seconds=" << setupSeconds(start)
+    std::cout << "[RT GPU setup] scans=" << scans.size()
               << " geometry=" << (instanced ? "shared-gas-instances" : "gpu-triangles")
-              << " active_scans=" << stats.activeScans << " pipeline_seconds=" << pipelineSeconds
-              << " geometry_seconds=" << geometrySeconds
-              << " sizing_seconds=" << inputSeconds + stats.sizingSeconds
-              << " build_seconds=" << stats.buildSeconds << " as_bytes=" << stats.outputBytes
+              << " active_scans=" << stats.activeScans
+              << " as_bytes=" << stats.outputBytes
               << " scratch_bytes=" << stats.scratchBytes << " geometry_bytes="
               << (instanced ? peakCount * sizeof(OptixInstance) + 3 * sizeof(float3)
                             : peakCount * 3 * sizeof(float3))

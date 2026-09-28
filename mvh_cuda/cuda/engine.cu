@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "profiling.h"
 #include "sequence_ids.h"
 #include "score_impact.h"
 #ifdef MVH_CUDA_ENABLE_RT
@@ -13,7 +12,6 @@
 #include <cub/cub.cuh>
 #include <memory>
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -45,7 +43,6 @@ struct UnindexedSpectrum {
 };
 std::vector<UnindexedSpectrum> unindexedSpectra;
 bool deviceReady=false;
-double now(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 void require(bool condition, const std::string &message) {
     if (!condition) throw std::runtime_error("CUDA MVH: " + message);
 }
@@ -169,7 +166,7 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
 #ifdef MVH_CUDA_ENABLE_RT
     mvh_rt_gpu::reset();
 #endif
-    initialize();double start=now();Config cfg=configuration();int n=scans.size();require(n>0,"empty scan collection");
+    initialize();Config cfg=configuration();int n=scans.size();require(n>0,"empty scan collection");
     std::vector<RawScan> raw;std::vector<double> mz,intensity;std::vector<int> charges;
     for(auto *s:scans){require(s->vdMZ.size()==s->vdIntensity.size()&&s->vdMZ.size()==s->viCharge.size(),"raw peak array lengths");
         require(s->vdMZ.size()<=std::numeric_limits<int>::max(),"scan too large");
@@ -214,13 +211,12 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
         s->dSumIntensity=r.sum;s->dMaxIntensity=r.max;
     }
     MVH::initialLnTable(maxBins);
-    std::cout<<"[CUDA preprocessing] scans="<<n<<" seconds="<<now()-start<<" verified="<<verification
+    std::cout<<"[CUDA preprocessing] scans="<<n<<" verified="<<verification
              <<" host_bucket_entries="<<hostBucketEntries<<'\n';
 }
 
 void preprocessingMVH(std::vector<Peptide *> &peptides){
-    MVH_PROFILE_SCOPE("mvh/batch/preprocess_peptides");
-    initialize();if(peptides.empty())return;double start=now();
+    initialize();if(peptides.empty())return;
     std::vector<Rule> rules;for(const auto &pair:ProNovoConfig::getNeutralLossList()){
         require(!pair.first.empty()&&pair.first.size()<MaxText&&pair.second.size()<MaxText,"neutral loss rule too long");
         Rule r{};r.fromLen=pair.first.size();r.toLen=pair.second.size();std::memcpy(r.from,pair.first.data(),r.fromLen);std::memcpy(r.to,pair.second.data(),r.toLen);rules.push_back(r);
@@ -251,7 +247,7 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
         peptides[i]->iPeptideLength=lengths[i];
     }
     preparedPeptides=std::move(prepared);
-    std::cout<<"[CUDA peptide preprocessing] peptides="<<n<<" seconds="<<now()-start<<" verified="<<verification<<'\n';
+    std::cout<<"[CUDA peptide preprocessing] peptides="<<n<<" verified="<<verification<<'\n';
 }
 
 namespace {
@@ -279,9 +275,7 @@ uint64_t exclusiveOffsets(Buffer<uint64_t> &counts, Buffer<uint64_t> &offsets) {
 void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
                          const std::vector<std::tuple<double, int, MS2Scan *>> &precursors,
                          const std::vector<MS2Scan *> &scans) {
-    MVH_PROFILE_SCOPE("mvh/batch/assign_scans");
     initialize();
-    const double start = now();
     auto batch = std::make_unique<AssignedBatch>();
     batch->peptideCount = peptides.size();
     std::unordered_map<const MS2Scan *, int> scanIds;
@@ -364,7 +358,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
         }
     }
     std::cout << "[CUDA assignment] generated=" << size << " assigned=" << matchedPeptides
-              << " associations=" << associations << " seconds=" << now() - start
+              << " associations=" << associations
               << " backend=" << matchBackend << " verified=" << verification << '\n';
     assignedBatch = std::move(batch);
 }
@@ -418,7 +412,6 @@ std::unique_ptr<ScoringSpectra> scoringSpectra;
 void resetScoringSpectra() { scoringSpectra.reset(); }
 
 ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const Config& config) {
-    MVH_PROFILE_SCOPE("mvh/pack/prepare_or_reuse_spectra");
     if (scoringSpectra) {
         require(scoringSpectra->owners == scans, "scan dataset changed without preprocessing/reset");
         require(scoringSpectra->classCount == config.classes &&
@@ -509,8 +502,6 @@ struct PackedScoringBatch {
 PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
                                    const std::vector<Peptide *> &peptides,
                                    const Config &config) {
-    MVH_PROFILE_SCOPE("mvh/pack/all");
-    MVH_PROFILE_BEGIN(setupRange, "mvh/pack/setup");
     PackedScoringBatch batch;
     batch.peptideObjects = peptides;
     batch.prepared = std::move(preparedPeptides);
@@ -536,12 +527,8 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
             }
         batch.assignment->candidates = std::make_unique<Buffer<Candidate>>(candidates);
     }
-    MVH_PROFILE_END(setupRange);
-    MVH_PROFILE_BEGIN(sequenceRange, "mvh/pack/sequence_ids");
     for (size_t i = 0; i < peptides.size(); ++i)
         batch.peptides.push_back({batch.prepared->offsets[i], batch.sequenceId(peptides[i]->sPeptide)});
-    MVH_PROFILE_END(sequenceRange);
-    MVH_PROFILE_BEGIN(spectraRange, "mvh/pack/spectra_and_top");
     batch.spectra = &prepareScoringSpectra(scans, config);
     batch.scans = batch.spectra->scans;
     batch.initialTop.resize(scans.size() * TopN);
@@ -556,7 +543,6 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
                 peptide->dScore, batch.sequenceId(peptide->sIdentifiedPeptide)};
         }
     }
-    MVH_PROFILE_END(spectraRange);
     return batch;
 }
 
@@ -565,8 +551,6 @@ struct ScoringOutput {
     std::vector<ScoringEvent> events;
     std::vector<Top> finalTop;
     std::vector<ScanCounts> counts;
-    double allocationAndUploadSeconds=0, theorySeconds=0, kernelSeconds=0;
-    double retentionSeconds=0, compactionSeconds=0, downloadSeconds=0;
     uint64_t cachedIonCount=0;
     int chargeStride=0;
 };
@@ -585,12 +569,8 @@ __global__ void compareRtResults(const Result *a,const Result *b,int n,unsigned 
 #endif
 
 ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config &config) {
-    MVH_PROFILE_SCOPE("mvh/gpu/service");
     // Declared before buffers so the cleanup range ends after their destructors.
-    MVH_PROFILE_DEFER(deviceCleanupRange, "mvh/gpu/release_temporaries");
-    MVH_PROFILE_BEGIN(uploadRange, "mvh/gpu/allocate_upload");
     ScoringOutput output;
-    const double uploadStart = now();
     const auto &candidates = *batch.assignment->candidates;
     const int size = candidates.n, scanCount = batch.scans.size();
     Buffer<Scan> scans(batch.scans);
@@ -606,11 +586,8 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     Buffer<ScanCounts> counts(scanCount);
     if (size) setCandidateRanges<<<(size + 127) / 128, 128>>>(scans.p, candidates.p, size);
     synced();
-    output.allocationAndUploadSeconds = now() - uploadStart;
-    MVH_PROFILE_END(uploadRange);
 #ifdef MVH_CUDA_ENABLE_RT
     if (matchBackend!="cuda") {
-        MVH_PROFILE_SCOPE("mvh/rt/prepare_or_reuse");
         using mvh_rt_gpu::GeometryKind;
         const auto geometry =
             matchBackend == "rt-custom" ? GeometryKind::Spheres :
@@ -620,11 +597,8 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         mvh_rt_gpu::prepare(
             batch.scans, scans.p, peaks.p, classes.p,
             peaks.n, geometry, config);
-            }
+    }
 #endif
-
-    MVH_PROFILE_BEGIN(theoryRange, "mvh/gpu/theory_cache");
-    const double theoryStart = now();
     std::unique_ptr<Buffer<int>> active;
     std::unique_ptr<Buffer<uint64_t>> ionOffsets;
     std::unique_ptr<Buffer<double>> cachedIons;
@@ -658,18 +632,12 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         }
     }
     if (!output.chargeStride) { active.reset(); ionOffsets.reset(); }
-    output.theorySeconds = now() - theoryStart;
-    MVH_PROFILE_END(theoryRange);
 
     // Diagnostics allocate their reference only after theory-cache decisions.
     // They never replace the RT results used by the actual top-candidate filter.
     std::unique_ptr<Buffer<Result>> scoreReference;
     if (scoreImpactEnabled) scoreReference = std::make_unique<Buffer<Result>>(size);
     Result *bucketResults = scoreReference ? scoreReference->p : results.p;
-
-    MVH_PROFILE_BEGIN(scoringRange, "mvh/gpu/match_and_score");
-    CudaEvent kernelStart, kernelEnd;
-    check(cudaEventRecord(kernelStart.event));
     if (size && (matchBackend=="cuda" || matchBackend=="rt-audit" || scoreImpactEnabled)) ScoreSequenceVsSpectrum<<<(size + 127) / 128, 128>>>(scans.p,
         candidates.p, size, peptides.p, texts.p, peaks.p, classes.p, buckets.p,
         table.p, bucketResults, config, ionOffsets ? ionOffsets->p : nullptr,
@@ -702,28 +670,16 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         }
     }
 #endif
-    check(cudaEventRecord(kernelEnd.event));
-    check(cudaEventSynchronize(kernelEnd.event));
-    float milliseconds=0;
-    check(cudaEventElapsedTime(&milliseconds, kernelStart.event, kernelEnd.event));
-    output.kernelSeconds = milliseconds / 1000.0;
-    MVH_PROFILE_END(scoringRange);
+    // Keep the existing completion/error boundary without timing events.
+    synced();
 
     if (scoreReference) {
         output.scoreImpact = collectScoreImpact(candidates.p, size, scoreReference->p, results.p);
         scoreReference.reset();
     }
-
-    MVH_PROFILE_BEGIN(retentionRange, "mvh/gpu/retain_top");
-    const double retentionStart = now();
     scorePeptidesMVH<<<(scanCount + 127) / 128, 128>>>(scans.p, scanCount,
         candidates.p, peptides.p, initialTop.p, finalTop.p, results.p, counts.p);
     synced();
-    output.retentionSeconds = now() - retentionStart;
-    MVH_PROFILE_END(retentionRange);
-
-    MVH_PROFILE_BEGIN(compactionRange, "mvh/gpu/compact_results");
-    const double compactStart = now();
     Buffer<int> selected(size), selectedCount(1);
     int eventCount = size;
     if (size && !verification) {
@@ -753,14 +709,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
             candidates.p, results.p, events.p);
         synced();
     }
-    output.compactionSeconds = now() - compactStart;
-    MVH_PROFILE_END(compactionRange);
-    MVH_PROFILE_BEGIN(downloadRange, "mvh/gpu/download_results");
-    const double downloadStart = now();
     events.read(output.events); finalTop.read(output.finalTop); counts.read(output.counts);
-    output.downloadSeconds = now() - downloadStart;
-    MVH_PROFILE_END(downloadRange);
-    MVH_PROFILE_RESUME(deviceCleanupRange);
     return output;
 }
 
@@ -821,15 +770,10 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
 } // namespace
 
 void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *> &peptides) {
-    MVH_PROFILE_SCOPE("mvh/batch/score_and_restore");
-    MVH_PROFILE_DEFER(batchCleanupRange, "mvh/host/release_packed_batch");
     initialize();
-    const double start = now();
     const Config config = configuration();
     auto batch = packScoringBatch(scans, peptides, config);
-    const double packed = now();
     const auto output = executeScoringBatch(batch, config);
-    const double executed = now();
     if (scoreImpactEnabled) {
         require(bool(scoreImpactWriter), "score-impact output was not initialized");
         scoreImpactWriter->writeBatch(output.scoreImpact);
@@ -842,23 +786,11 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
                                                peptide->sPeptide);
         }
     }
-    MVH_PROFILE_BEGIN(restoreRange, "mvh/host/restore_results");
     const auto counts = restoreScoringResults(scans, batch, output);
-    MVH_PROFILE_END(restoreRange);
-    const double restored = now();
     std::cout << std::setprecision(12)
               << "[CUDA scoring] candidates=" << batch.assignment->candidates->n
               << " calls=" << counts.calls << " success=" << counts.successes
               << " inrange=" << counts.predicted << " matched=" << counts.matched
-              << " pack_seconds=" << packed - start
-              << " gpu_service_seconds=" << executed - packed
-              << " allocation_upload_seconds=" << output.allocationAndUploadSeconds
-              << " theory_seconds=" << output.theorySeconds
-              << " kernel_seconds=" << output.kernelSeconds
-              << " retention_seconds=" << output.retentionSeconds
-              << " compaction_seconds=" << output.compactionSeconds
-              << " download_seconds=" << output.downloadSeconds
-              << " replay_verify_seconds=" << restored - executed
               << " cached_ions=" << output.cachedIonCount
               << " cache_charge_stride=" << output.chargeStride
               << " downloaded_events=" << output.events.size()
@@ -871,7 +803,6 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
                   + batch.spectra->lnTable.size() * sizeof(double))
               << " spectrum_cache=" << (keepSpectraOnDevice ? "device" : "host")
               << " backend=" << matchBackend << " verified=" << verification << '\n';
-    MVH_PROFILE_RESUME(batchCleanupRange);
 }
 
 }

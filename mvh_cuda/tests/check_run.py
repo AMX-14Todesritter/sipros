@@ -32,6 +32,12 @@ with tempfile.TemporaryDirectory(prefix='mvh-check-',dir=a.binary.parent.parent)
     run('bad_batch', batch=0, expect_ok=False)
     assert (one/'mvh_psms.tsv').read_bytes()==(normal/'mvh_psms.tsv').read_bytes()
     assert (one/'mvh_psms.tsv').read_bytes()==(four/'mvh_psms.tsv').read_bytes()
+    with (normal/'run_summary.tsv').open() as f:
+        timings = dict(list(csv.reader(f, delimiter='\t'))[1:])
+    parts = [float(timings[k]) for k in ('config_and_load_seconds', 'preprocess_seconds',
+                                        'search_seconds', 'export_seconds')]
+    assert all(t >= 0 for t in parts), timings
+    assert abs(float(timings['total_seconds']) - sum(parts)) < 1e-6, timings
     with (one/'mvh_psms.tsv').open() as f: rows=list(csv.DictReader(f,delimiter='\t'))
     assert any(r['peptide']=='[LDNM~ATK]' for r in rows), rows
     # Existing output rejection must leave results untouched.

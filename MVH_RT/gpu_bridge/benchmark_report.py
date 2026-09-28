@@ -7,7 +7,7 @@ def write_report(directory):
     directory = Path(directory)
     r = json.loads((directory / 'report.json').read_text())
     lines = ['# CPU / CUDA / GPU-RT benchmark', '',
-             'Search includes RT initialization. Scoring includes ion generation, matching and MVH calculation. CPU scoring is not separately timed.', '',
+             'Search includes RT initialization. Clean builds do not collect scoring or RT setup timers; unavailable measurements are shown as —.', '',
              '| Backend | Runs | Wall s | Search s | Scoring s | RT setup s | Host peak GiB | Device peak GiB |',
              '|---|---:|---:|---:|---:|---:|---:|---:|']
     for backend, a in r.get('averages', {}).items():
@@ -15,7 +15,7 @@ def write_report(directory):
         vals = []
         for k in ['wall_seconds', 'search_seconds', 'scoring_kernel_seconds', 'rt_setup_seconds']:
             v = a[k]
-            vals.append('—' if backend == 'cpu' and k in ('scoring_kernel_seconds', 'rt_setup_seconds') else
+            vals.append('—' if v['mean'] is None or (backend == 'cpu' and k in ('scoring_kernel_seconds', 'rt_setup_seconds')) else
                         f"{v['mean']:.3f}" + (f" ± {v['stdev']:.3f}" if v['stdev'] is not None else ''))
         lines.append(f'| {backend} | {n} | ' + ' | '.join(vals) +
                      f" | {a['host_hwm_mib']['mean']/1024:.2f} | {a['device_peak_mib']['mean']/1024:.2f} |")
@@ -31,7 +31,7 @@ def write_report(directory):
         if hashes.get(left) and hashes.get(right):
             lines.append(f'- {left} / {right}: ' + ('identical' if len(hashes[left] | hashes[right]) == 1 else 'different'))
     lines += ['', 'The legacy triangle RT backends have known float-zero/boundary differences; evaluate rt-custom with the score-impact validation script. PSM row differences are not an accuracy percentage. A different output does not automatically fail the performance run.', '',
-              'Raw commands, hashes, per-batch timings and memory metrics: report.json. Build/test records and source/configuration snapshot: parent directory when using run_benchmark.sh.', '']
+              'Raw commands, hashes, batch counters, available timings and memory metrics: report.json. Build/test records and source/configuration snapshot: parent directory when using run_benchmark.sh.', '']
     (directory / 'REPORT.md').write_text('\n'.join(lines))
 
 

@@ -28,7 +28,6 @@ AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inpu
     std::vector<OptixAccelBufferSizes> sizes(layout.size());
     std::vector<size_t> offsets(layout.size());
     std::vector<OptixTraversableHandle> scanHandles(layout.size());
-    const auto sizingStart = SetupClock::now();
     for (size_t i = 0; i < layout.size(); ++i) {
         if (layout[i].skip || !layout[i].peaks) continue;
         ++stats.activeScans;
@@ -37,9 +36,7 @@ AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inpu
         stats.outputBytes += alignedAccelerationSize(sizes[i].outputSizeInBytes);
         stats.scratchBytes = std::max(stats.scratchBytes, sizes[i].tempSizeInBytes);
     }
-    stats.sizingSeconds = setupSeconds(sizingStart);
 
-    const auto buildStart = SetupClock::now();
     acceleration = std::make_unique<DeviceBuffer<unsigned char>>(stats.outputBytes);
     DeviceBuffer<unsigned char> scratch(stats.scratchBytes);
     // Default-stream ordering permits one scratch allocation for all scans.
@@ -50,7 +47,6 @@ AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inpu
             sizes[i].outputSizeInBytes, &scanHandles[i], nullptr, 0));
     }
     checkCuda(cudaDeviceSynchronize());
-    stats.buildSeconds = setupSeconds(buildStart);
     handles = std::make_unique<DeviceBuffer<OptixTraversableHandle>>(scanHandles);
     return stats;
 }

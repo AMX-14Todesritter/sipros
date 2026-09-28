@@ -149,9 +149,14 @@ try:
                 fields = ['candidates', 'calls', 'kernel_seconds', 'theory_seconds',
                           'gpu_service_seconds', 'allocation_upload_seconds', 'retention_seconds',
                           'download_seconds', 'cached_ions', 'pack_seconds', 'replay_verify_seconds', 'inrange']
-                item['totals'] = {k: sum(float(b[k]) for b in item['batches']) for k in fields}
-                item['rt_setup_seconds'] = sum(float(x) for x in re.findall(
-                    r'\[RT GPU setup\] scans=\d+ seconds=([0-9.eE+-]+)', text))
+                # Clean builds keep counters but do not collect detailed timers.
+                # Missing measurements are unavailable, never zero-duration work.
+                item['totals'] = {k: sum(float(b[k]) for b in item['batches'])
+                                  if item['batches'] and all(k in b for b in item['batches'])
+                                  else None for k in fields}
+                setup_times = re.findall(
+                    r'\[RT GPU setup\] scans=\d+ seconds=([0-9.eE+-]+)', text)
+                item['rt_setup_seconds'] = sum(map(float, setup_times)) if setup_times else None
                 item['rt_setup'] = [dict(re.findall(r'(\w+)=([^ ]+)', line))
                                     for line in text.splitlines() if line.startswith('[RT GPU setup]')]
             report['runs'].append(item)
@@ -171,7 +176,8 @@ try:
             'device_peak_mib': [r['device_used_sampled_peak_bytes'] / 2**20 for r in runs],
             'device_peak_minus_before_mib': [r['device_used_peak_minus_before_bytes'] / 2**20 for r in runs],
         }
-        report['averages'][backend] = {k: {'mean': statistics.mean(v), 'stdev': statistics.stdev(v) if len(v)>1 else None}
+        report['averages'][backend] = {k: {'mean': statistics.mean(v) if all(x is not None for x in v) else None,
+                                         'stdev': statistics.stdev(v) if len(v)>1 and all(x is not None for x in v) else None}
                                        for k, v in metrics.items()}
     cpu_hashes = {r['psm_sha256'] for r in report['runs'] if r['backend'] == 'cpu'}
     report['cpu_cuda_psms_identical'] = (len(cpu_hashes) == 1 and all(

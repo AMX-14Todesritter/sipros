@@ -122,9 +122,8 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 
 实验 RT 构建可选 `--match-backend rt-custom`，当前采用 `(m/z, 原始 class, 0)` 内置 sphere 和向下 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
 
-Optional, default-off NVTX stage instrumentation and separate profiling builds:
-[PROFILING.md](PROFILING.md). Enable with `-DMVH_ENABLE_PROFILING=ON`; use `OFF`
-and rebuild to remove all application NVTX range calls from the normal build.
+This branch retains only run-level timing and ordinary counters; application NVTX
+and fine-grained timers have been removed. See [timing and build contract](PROFILING.md).
 
 ### Shared GPU input packing
 
@@ -151,20 +150,10 @@ when a top-candidate string is replaced during result restoration. It does not
 borrow mutable strings or preserve sequence IDs across batches. This reduces
 individual allocations/deallocations without adding a custom hash-table algorithm.
 
-The validation build is `build/mvh_rt/packing_optimized` (profiling ON). The earlier
-`profile_enabled` binary was kept as the comparison baseline. To profile the new
-build, explicitly select it:
-
-```bash
-bash MVH_RT/gpu_bridge/run_profile.sh --dataset marine --batch 6000000 \
-  --binary /workspace/sipros/build/mvh_rt/packing_optimized/bin/sipros_mvh_cuda \
-  --spectrum-cache host
-```
-
-Change `host` to `device` to evaluate the memory/speed tradeoff. Rebuild the chosen
-build directory after source changes. Normal benchmark scripts still select
-`gpu_integration`, so rebuild that directory before using them for the optimized
-version. Keep baseline and optimized measurements identified by binary hash.
+Rebuild `build/mvh_rt/gpu_integration` before running the normal benchmark scripts.
+Old `packing_optimized` and `profile_enabled` binaries may still contain profiling;
+they are historical artifacts, not builds of the current clean source. Both spectrum
+cache modes remain available through `--spectrum-cache host|device`.
 
 ## Peak selection: positive class priority
 

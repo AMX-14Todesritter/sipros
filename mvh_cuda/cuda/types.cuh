@@ -42,13 +42,6 @@ struct ScanCounts {
 };
 // Explicit names keep host restoration and device decisions in agreement.
 enum ResultStatus { ResultSkipped = 0, ResultMerged = 1, ResultInsufficient = 2, ResultScored = 3, ResultAccepted = 4 };
-struct CudaEvent {
-    cudaEvent_t event{};
-    CudaEvent() { check(cudaEventCreate(&event)); }
-    ~CudaEvent() { cudaEventDestroy(event); }
-    CudaEvent(const CudaEvent &) = delete;
-    CudaEvent &operator=(const CudaEvent &) = delete;
-};
 struct Result { double score; int status,predicted,matched; }; // 1 merged, 2 insufficient, 3 scored; negative error
 struct ScoringEvent { Candidate candidate; Result result; };
 struct Top { double score; int sequenceId; };

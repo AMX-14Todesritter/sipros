@@ -18,18 +18,24 @@ int main(int argc, char **argv) {
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;
             }
-            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--match-backend")
+            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--match-backend" && key!="--spectrum-cache")
                 throw std::runtime_error("Unknown option: "+key);
             if (++i==argc || options.count(key)) throw std::runtime_error("Missing/duplicate option: "+key);
             options[key]=argv[i];
         }
         if (options.count("--match-backend")) mvh_cuda::setMatchBackend(options["--match-backend"]);
         mvh_cuda::setScoreImpact(scoreImpact);
+        if (options.count("--spectrum-cache")) {
+            const auto& mode = options["--spectrum-cache"];
+            if (mode != "host" && mode != "device")
+                throw std::runtime_error("--spectrum-cache must be host or device");
+            mvh_cuda::setSpectrumDeviceCache(mode == "device");
+        }
         for (const auto *key : {"-f","-c","-fasta"})
             if (!options.count(key) || options[key].empty()) throw std::runtime_error(std::string("Required: ")+key);
         int threads=1;

@@ -2151,6 +2151,7 @@ char PeakList::findNear(double mz, double tolerance)
 	}
 	double dMin = 1000000, dDiff;
 	int iMzU, iMzL, i, j;
+	int bestClass = -1;
 	char iClass = iNULL;
 	iMzU = (int)(mz + tolerance);
 	iMzL = (int)(mz - tolerance);
@@ -2177,11 +2178,22 @@ char PeakList::findNear(double mz, double tolerance)
 		{
 			for (i = pMassHub.at(iStart * 2), j = pMassHub.at(iStart * 2 + 1); i < j; ++i)
 			{
-				dDiff = fabs(mz - pPeaks.at(i));
-				if (dDiff < dMin)
+				const int candidateClass = pClasses[i];
+				if (candidateClass <= 0) {
+					continue;
+				}
+
+				const double distance = fabs(mz - pPeaks.at(i));
+				if (!(distance < tolerance)) {
+					continue;
+				}
+
+				if (candidateClass > bestClass ||
+					(candidateClass == bestClass && distance < dMin))
 				{
-					dMin = dDiff;
+					bestClass = candidateClass;
 					iClass = pClasses[i];
+					dMin = distance;
 				}
 			}
 		}

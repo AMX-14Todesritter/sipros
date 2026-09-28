@@ -12,4 +12,4 @@ for filename,allowed in changes.items():
  for name in original:
   if name not in allowed:assert original[name]==converted[name], 'Serial method changed: '+name
  assert '#pragma omp' not in (m/filename).read_text()
-print('PASS: CPU baseline unchanged; unmodified methods identical; GPU assignment/search orchestration explicitly allowed; all four OpenMP loops replaced')
+print('PASS: CPU baseline matches documented manifest; unmodified methods identical; GPU assignment/search orchestration explicitly allowed; all four OpenMP loops replaced')

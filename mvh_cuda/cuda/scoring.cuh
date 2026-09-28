@@ -37,16 +37,47 @@ __device__ void saveScoreSort(Top *a,int n){
     // Guarded insertion has the same shifts as the final guarded/unguarded passes.
     for(int i=1;i<n;++i){Top value=a[i];int j=i;while(j>0&&GreaterScore(value,a[j-1])){a[j]=a[j-1];--j;}a[j]=value;}
 }
-__device__ int findNear(double mz,double tolerance,const Scan &s,const double *peaks,const int *classes,const short *hub){
-    if(!s.peaks)return 0;int lower=int(mz-tolerance),upper=int(mz+tolerance);
-    if(upper<s.lowest||lower>s.highest)return 0;
-    int begin=lower>=s.lowest?lower-s.lowest:0,end=upper<=s.highest?upper-s.lowest:s.highest-s.lowest;
-    double best=1000000;int cls=0;
-    for(int bucket=begin;bucket<=end;++bucket){int first=hub[s.hubOffset+2*bucket],last=hub[s.hubOffset+2*bucket+1];
-        if(first!=-1)for(int i=first;i<last;++i){double error=fabs(mz-peaks[s.peakOffset+i]);if(error<best){best=error;cls=classes[s.peakOffset+i];}}
+// Select within the strict tolerance: highest positive class, then nearest m/z.
+// A return value of 0 means no scored peak; class-0 peaks are excluded.
+__device__ int findNear(double mz, double tolerance, const Scan &scan,
+                        const double *peaks, const int *classes, const short *hub) {
+    if (!scan.peaks) return 0;
+
+    const int lower = int(mz - tolerance);
+    const int upper = int(mz + tolerance);
+    if (upper < scan.lowest || lower > scan.highest) return 0;
+
+    const int firstBucket = lower >= scan.lowest ? lower - scan.lowest : 0;
+    const int lastBucket = upper <= scan.highest ? upper - scan.lowest
+                                                 : scan.highest - scan.lowest;
+    int bestClass = -1;
+    double bestDistance = tolerance;
+    for (int bucket = firstBucket; bucket <= lastBucket; ++bucket) {
+        const int first = hub[scan.hubOffset + 2 * bucket];
+        const int last = hub[scan.hubOffset + 2 * bucket + 1];
+        if (first == -1) continue;
+
+        for (int i = first; i < last; ++i) {
+            const auto peakIndex = scan.peakOffset + i;
+            const int candidateClass = classes[peakIndex];
+            if (candidateClass <= 0) continue;
+
+            const double distance = fabs(mz - peaks[peakIndex]);
+            // Bucket membership is only a coarse filter, not a tolerance test.
+            if (!(distance < tolerance)) continue;
+
+            const bool higherClass = candidateClass > bestClass;
+            const bool closerInSameClass =
+                candidateClass == bestClass && distance < bestDistance;
+            if (higherClass || closerInSameClass) {
+                bestClass = candidateClass;
+                bestDistance = distance;
+            }
+        }
     }
-    return best<tolerance?cls:0;
+    return bestClass >= 0 ? bestClass : 0;
 }
+
 struct IonCounter {
     const Scan &scan;const Config &cfg;const double *peaks;const int *classes;const short *hub;
     int key[MaxClasses+1],predicted=0,matched=0;

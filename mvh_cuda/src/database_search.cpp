@@ -1,5 +1,6 @@
 #include "mvh_scan_vector.h"
 #include "engine.h"
+#include "profiling.h"
 
 void MvhScanVector::GetAllRangeFromMass(double dPeptideMass, vector<std::pair<int, int>> &vpPeptideMassRanges)
 // all ranges of MS2 scans are stored in  vpPeptideMassWindows
@@ -93,20 +94,31 @@ void MvhScanVector::assignPeptides2Scans(const vector<Peptide *> &peptides)
 
 void MvhScanVector::processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray)
 {
+    MVH_PROFILE_SCOPE("mvh/batch/process");
     assignPeptides2Scans(vpPeptideArray);
     mvh_cuda::preprocessingMVH(vpPeptideArray);
     mvh_cuda::scorePeptidesMVH(vpAllMS2Scans, vpPeptideArray);
+    MVH_PROFILE_SCOPE("mvh/batch/delete_peptides");
     for (auto *peptide : vpPeptideArray) delete peptide;
     vpPeptideArray.clear();
 }
 
 void MvhScanVector::searchDatabaseMvh()
 {
+    MVH_PROFILE_SCOPE("mvh/search/database");
     CLOCKSTART;
     ProteinDatabase myProteinDatabase(bScreenOutput);
     vector<Peptide *> vpPeptideArray;
-    myProteinDatabase.loadDatabase();
-    this->preMvh();
+    {
+        MVH_PROFILE_SCOPE("mvh/search/load_database");
+        myProteinDatabase.loadDatabase();
+    }
+    {
+        MVH_PROFILE_SCOPE("mvh/search/prepare");
+        this->preMvh();
+    }
+    // Includes digestion, peptide construction and batch assembly, not scoring.
+    MVH_PROFILE_BEGIN(generationRange, "mvh/search/generate_peptides");
     if (myProteinDatabase.getFirstProtein()) {
         auto *currentPeptide = new Peptide;
         while (myProteinDatabase.getNextPeptide(currentPeptide)) {
@@ -114,13 +126,19 @@ void MvhScanVector::searchDatabaseMvh()
             // the former per-peptide CPU query; scan-local order stays intact.
             vpPeptideArray.push_back(currentPeptide);
             currentPeptide = new Peptide;
-            if (vpPeptideArray.size() >= size_t(mvh_cuda::peptideBatchSize()))
+            if (vpPeptideArray.size() >= size_t(mvh_cuda::peptideBatchSize())) {
+                MVH_PROFILE_END(generationRange);
                 processPeptideArrayMvh(vpPeptideArray);
+                MVH_PROFILE_RESUME(generationRange);
+            }
         }
         delete currentPeptide;
+        MVH_PROFILE_END(generationRange);
         if (!vpPeptideArray.empty()) processPeptideArrayMvh(vpPeptideArray);
     }
+    MVH_PROFILE_END(generationRange);
     CLOCKSTOP;
+    MVH_PROFILE_SCOPE("mvh/search/finalize");
     this->postMvh();
     MVH::destroyLnTable();
     PeptideUnit::iNumScores = 1;

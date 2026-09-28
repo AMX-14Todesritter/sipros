@@ -12,6 +12,8 @@ void setMatchBackend(const std::string &name);
 const std::string &matchBackendName();
 struct MatchBackendScope { ~MatchBackendScope(); };
 void setPeptideBatchSize(int size);
+void setSpectrumDeviceCache(bool enabled);
+bool spectrumDeviceCache();
 int peptideBatchSize();
 void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans);
 void preprocessingMVH(std::vector<Peptide *> &peptides);

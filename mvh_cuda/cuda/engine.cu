@@ -1,4 +1,6 @@
 #include "engine.h"
+#include "profiling.h"
+#include "sequence_ids.h"
 #include "score_impact.h"
 #ifdef MVH_CUDA_ENABLE_RT
 #include "bridge.h"
@@ -20,12 +22,14 @@
 
 namespace mvh_cuda {
 namespace {
+void resetScoringSpectra();
 bool verification=false;
 bool scoreImpactEnabled = false;
 std::unique_ptr<ScoreImpactWriter> scoreImpactWriter;
 std::string matchBackend="cuda";
 int batchSize=2000000;
 bool useIonCache=true;
+bool keepSpectraOnDevice=false;
 struct PreparedPeptides {
     std::unique_ptr<Buffer<char>> texts;
     std::vector<uint64_t> offsets;
@@ -138,6 +142,7 @@ void startScoreImpact(const std::string &outputDirectory) {
 
 MatchBackendScope::~MatchBackendScope() {
     scoreImpactWriter.reset();
+    resetScoringSpectra();
     unindexedSpectra.clear();
 #ifdef MVH_CUDA_ENABLE_RT
     mvh_rt_gpu::reset();
@@ -156,8 +161,11 @@ void setMatchBackend(const std::string &name) {
 }
 void setPeptideBatchSize(int size) { require(size > 0, "batch size must be positive"); batchSize = size; }
 int peptideBatchSize() { return batchSize; }
+void setSpectrumDeviceCache(bool enabled) { keepSpectraOnDevice = enabled; }
+bool spectrumDeviceCache() { return keepSpectraOnDevice; }
 
 void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
+    resetScoringSpectra();
 #ifdef MVH_CUDA_ENABLE_RT
     mvh_rt_gpu::reset();
 #endif
@@ -211,6 +219,7 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
 }
 
 void preprocessingMVH(std::vector<Peptide *> &peptides){
+    MVH_PROFILE_SCOPE("mvh/batch/preprocess_peptides");
     initialize();if(peptides.empty())return;double start=now();
     std::vector<Rule> rules;for(const auto &pair:ProNovoConfig::getNeutralLossList()){
         require(!pair.first.empty()&&pair.first.size()<MaxText&&pair.second.size()<MaxText,"neutral loss rule too long");
@@ -270,6 +279,7 @@ uint64_t exclusiveOffsets(Buffer<uint64_t> &counts, Buffer<uint64_t> &offsets) {
 void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
                          const std::vector<std::tuple<double, int, MS2Scan *>> &precursors,
                          const std::vector<MS2Scan *> &scans) {
+    MVH_PROFILE_SCOPE("mvh/batch/assign_scans");
     initialize();
     const double start = now();
     auto batch = std::make_unique<AssignedBatch>();
@@ -360,59 +370,67 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
 }
 
 namespace {
-// Host work scales with peptides and scans, not with millions of associations.
-struct PackedScoringBatch {
+// Immutable spectrum data is prepared once per preprocessed dataset. Only
+// candidate ranges and top lists change between scoring batches.
+struct ScoringSpectra {
+    std::vector<MS2Scan*> owners;
     std::vector<Scan> scans;
-    std::vector<PeptideInput> peptides;
-    std::vector<Peptide *> peptideObjects;
-    std::unique_ptr<PreparedPeptides> prepared;
-    std::vector<double> peaks;
+    std::vector<double> peaks, lnTable;
     std::vector<int> classes;
     std::vector<short> buckets;
-    std::vector<Top> initialTop;
-    std::vector<double> lnTable;
-    std::unordered_map<std::string, int> sequenceIds;
-    std::unique_ptr<AssignedBatch> assignment;
+    std::unique_ptr<Buffer<double>> devicePeaks, deviceTable;
+    std::unique_ptr<Buffer<int>> deviceClasses;
+    std::unique_ptr<Buffer<short>> deviceBuckets;
+    int classCount = 0;
+    bool withBuckets = false;
 
-    int sequenceId(const std::string &sequence) {
-        const auto found = sequenceIds.find(sequence);
-        if (found != sequenceIds.end()) return found->second;
-        const int id = sequenceIds.size();
-        sequenceIds.emplace(sequence, id);
-        return id;
+    void releaseDevice() {
+        deviceTable.reset();
+        deviceBuckets.reset();
+        deviceClasses.reset();
+        devicePeaks.reset();
+    }
+    void uploadOnce() {
+        if (deviceTable) return;
+        devicePeaks = std::make_unique<Buffer<double>>(peaks);
+        deviceClasses = std::make_unique<Buffer<int>>(classes);
+        deviceBuckets = std::make_unique<Buffer<short>>(buckets);
+        deviceTable = std::make_unique<Buffer<double>>(lnTable);
     }
 };
-
-PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
-                                   const std::vector<Peptide *> &peptides,
-                                   const Config &config) {
-    PackedScoringBatch batch;
-    batch.peptideObjects = peptides;
-    batch.prepared = std::move(preparedPeptides);
-    require(batch.prepared && batch.prepared->offsets.size() == peptides.size(),
-            "peptide preprocessing must precede scoring");
-    batch.sequenceIds.reserve(peptides.size());
-    batch.peptides.reserve(peptides.size());
-    batch.assignment = std::move(assignedBatch);
-    // The synthetic contract test supplies associations directly. Production
-    // searches always arrive with GPU-built associations from the parent call.
-    if (!batch.assignment) {
-        batch.assignment = std::make_unique<AssignedBatch>();
-        std::unordered_map<Peptide *, int> ids;
-        for (size_t i = 0; i < peptides.size(); ++i) ids.emplace(peptides[i], i);
-        std::vector<Candidate> candidates;
-        for (size_t s = 0; s < scans.size(); ++s)
-            for (const auto &entry : scans[s]->vMassChargePeptidePtrTuples) {
-                const int precursor = batch.assignment->precursors.size();
-                const int charge = std::get<1>(entry);
-                batch.assignment->precursors.push_back({std::get<0>(entry), int(s), charge});
-                batch.assignment->maxCharge = std::max(batch.assignment->maxCharge, charge);
-                candidates.push_back({ids.at(std::get<2>(entry)), precursor, int(s), charge});
-            }
-        batch.assignment->candidates = std::make_unique<Buffer<Candidate>>(candidates);
+// Default mode retains packed host arrays but releases device copies after
+// each scoring batch. Optional device mode also reuses those device copies.
+class SpectrumDeviceLease {
+public:
+    explicit SpectrumDeviceLease(ScoringSpectra& spectra) : spectra_(spectra) {
+        spectra_.uploadOnce();
     }
-    for (size_t i = 0; i < peptides.size(); ++i)
-        batch.peptides.push_back({batch.prepared->offsets[i], batch.sequenceId(peptides[i]->sPeptide)});
+    ~SpectrumDeviceLease() {
+        if (!keepSpectraOnDevice) spectra_.releaseDevice();
+    }
+    SpectrumDeviceLease(const SpectrumDeviceLease&) = delete;
+    SpectrumDeviceLease& operator=(const SpectrumDeviceLease&) = delete;
+private:
+    ScoringSpectra& spectra_;
+};
+std::unique_ptr<ScoringSpectra> scoringSpectra;
+
+void resetScoringSpectra() { scoringSpectra.reset(); }
+
+ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const Config& config) {
+    MVH_PROFILE_SCOPE("mvh/pack/prepare_or_reuse_spectra");
+    if (scoringSpectra) {
+        require(scoringSpectra->owners == scans, "scan dataset changed without preprocessing/reset");
+        require(scoringSpectra->classCount == config.classes &&
+                scoringSpectra->withBuckets == needsDeviceBuckets(),
+                "spectrum packing configuration changed without preprocessing/reset");
+        return *scoringSpectra;
+    }
+    auto next = std::make_unique<ScoringSpectra>();
+    auto& data = *next;
+    data.owners = scans;
+    data.classCount = config.classes;
+    data.withBuckets = needsDeviceBuckets();
     const bool uploadBuckets = needsDeviceBuckets();
     size_t peakCount = 0, bucketCount = 0;
     for (size_t index = 0; index < scans.size(); ++index) {
@@ -425,15 +443,14 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
             peakCount += unindexedSpectrum(index, scan).masses.size();
         }
     }
-    batch.scans.reserve(scans.size());
-    batch.peaks.reserve(peakCount); batch.classes.reserve(peakCount);
-    batch.buckets.reserve(bucketCount);
-    batch.initialTop.resize(scans.size() * TopN);
+    data.scans.reserve(scans.size());
+    data.peaks.reserve(peakCount); data.classes.reserve(peakCount);
+    data.buckets.reserve(bucketCount);
     int maxBins = 0;
     for (size_t scanIndex = 0; scanIndex < scans.size(); ++scanIndex) {
         const auto *scan = scans[scanIndex];
         Scan packed{};
-        packed.peakOffset = batch.peaks.size(); packed.hubOffset = batch.buckets.size();
+        packed.peakOffset = data.peaks.size(); packed.hubOffset = data.buckets.size();
         packed.skip = scan->bSkip;
         if (scan->pPeakList) {
             // CUDA and CPU-verified runs retain the original peak vectors.
@@ -456,26 +473,90 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
         // Keep CUDA's packing order: metadata, masses, classes, then buckets.
         if (scan->pPeakList) {
             const auto &indexed = *scan->pPeakList;
-            append(batch.peaks, indexed.pPeaks);
-            for (char intensityClass : indexed.pClasses) batch.classes.push_back(intensityClass);
-            if (uploadBuckets) append(batch.buckets, indexed.pMassHub);
+            append(data.peaks, indexed.pPeaks);
+            for (char intensityClass : indexed.pClasses) data.classes.push_back(intensityClass);
+            if (uploadBuckets) append(data.buckets, indexed.pMassHub);
         } else {
             // Pure RT consumes compact peak arrays without any mass hub.
             const auto &unindexed = unindexedSpectrum(scanIndex, scan);
-            append(batch.peaks, unindexed.masses);
-            for (char intensityClass : unindexed.classes) batch.classes.push_back(intensityClass);
+            append(data.peaks, unindexed.masses);
+            for (char intensityClass : unindexed.classes) data.classes.push_back(intensityClass);
         }
-        packed.topCount = scan->vpWeightSumTopPeptides.size();
+        data.scans.push_back(packed);
+    }
+    data.lnTable.resize(maxBins + 1);
+    for (int i = 0; i <= maxBins; ++i) data.lnTable[i] = (*MVH::lnTable)[i];
+    scoringSpectra = std::move(next);
+    return *scoringSpectra;
+}
+
+// Host work scales with peptides and scans, not with millions of associations.
+struct PackedScoringBatch {
+    std::vector<Scan> scans;
+    std::vector<PeptideInput> peptides;
+    std::vector<Peptide *> peptideObjects;
+    std::unique_ptr<PreparedPeptides> prepared;
+    std::vector<Top> initialTop;
+    ScoringSpectra* spectra = nullptr; // Owned by the dataset, reset before preprocessing.
+    std::unique_ptr<BatchSequenceIds> sequenceIds;
+    std::unique_ptr<AssignedBatch> assignment;
+
+    int sequenceId(const std::string &sequence) {
+        return sequenceIds->get(sequence);
+    }
+};
+
+PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
+                                   const std::vector<Peptide *> &peptides,
+                                   const Config &config) {
+    MVH_PROFILE_SCOPE("mvh/pack/all");
+    MVH_PROFILE_BEGIN(setupRange, "mvh/pack/setup");
+    PackedScoringBatch batch;
+    batch.peptideObjects = peptides;
+    batch.prepared = std::move(preparedPeptides);
+    require(batch.prepared && batch.prepared->offsets.size() == peptides.size(),
+            "peptide preprocessing must precede scoring");
+    batch.sequenceIds = std::make_unique<BatchSequenceIds>(peptides.size());
+    batch.peptides.reserve(peptides.size());
+    batch.assignment = std::move(assignedBatch);
+    // The synthetic contract test supplies associations directly. Production
+    // searches always arrive with GPU-built associations from the parent call.
+    if (!batch.assignment) {
+        batch.assignment = std::make_unique<AssignedBatch>();
+        std::unordered_map<Peptide *, int> ids;
+        for (size_t i = 0; i < peptides.size(); ++i) ids.emplace(peptides[i], i);
+        std::vector<Candidate> candidates;
+        for (size_t s = 0; s < scans.size(); ++s)
+            for (const auto &entry : scans[s]->vMassChargePeptidePtrTuples) {
+                const int precursor = batch.assignment->precursors.size();
+                const int charge = std::get<1>(entry);
+                batch.assignment->precursors.push_back({std::get<0>(entry), int(s), charge});
+                batch.assignment->maxCharge = std::max(batch.assignment->maxCharge, charge);
+                candidates.push_back({ids.at(std::get<2>(entry)), precursor, int(s), charge});
+            }
+        batch.assignment->candidates = std::make_unique<Buffer<Candidate>>(candidates);
+    }
+    MVH_PROFILE_END(setupRange);
+    MVH_PROFILE_BEGIN(sequenceRange, "mvh/pack/sequence_ids");
+    for (size_t i = 0; i < peptides.size(); ++i)
+        batch.peptides.push_back({batch.prepared->offsets[i], batch.sequenceId(peptides[i]->sPeptide)});
+    MVH_PROFILE_END(sequenceRange);
+    MVH_PROFILE_BEGIN(spectraRange, "mvh/pack/spectra_and_top");
+    batch.spectra = &prepareScoringSpectra(scans, config);
+    batch.scans = batch.spectra->scans;
+    batch.initialTop.resize(scans.size() * TopN);
+    for (size_t scanIndex = 0; scanIndex < scans.size(); ++scanIndex) {
+        auto& packed = batch.scans[scanIndex];
+        const auto& top = scans[scanIndex]->vpWeightSumTopPeptides;
+        packed.topCount = top.size();
         require(packed.topCount <= TopN, "top list larger than original limit");
         for (int rank = 0; rank < packed.topCount; ++rank) {
-            const auto *peptide = scan->vpWeightSumTopPeptides[rank];
+            const auto* peptide = top[rank];
             batch.initialTop[scanIndex * TopN + rank] = {
                 peptide->dScore, batch.sequenceId(peptide->sIdentifiedPeptide)};
         }
-        batch.scans.push_back(packed);
     }
-    batch.lnTable.resize(maxBins + 1);
-    for (int i = 0; i <= maxBins; ++i) batch.lnTable[i] = (*MVH::lnTable)[i];
+    MVH_PROFILE_END(spectraRange);
     return batch;
 }
 
@@ -504,6 +585,10 @@ __global__ void compareRtResults(const Result *a,const Result *b,int n,unsigned 
 #endif
 
 ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config &config) {
+    MVH_PROFILE_SCOPE("mvh/gpu/service");
+    // Declared before buffers so the cleanup range ends after their destructors.
+    MVH_PROFILE_DEFER(deviceCleanupRange, "mvh/gpu/release_temporaries");
+    MVH_PROFILE_BEGIN(uploadRange, "mvh/gpu/allocate_upload");
     ScoringOutput output;
     const double uploadStart = now();
     const auto &candidates = *batch.assignment->candidates;
@@ -511,19 +596,21 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     Buffer<Scan> scans(batch.scans);
     Buffer<PeptideInput> peptides(batch.peptides);
     const auto &texts = *batch.prepared->texts;
-    Buffer<double> peaks(batch.peaks), table(batch.lnTable);
-    Buffer<int> classes(batch.classes);
-    // Empty in pure RT (also with CPU verification): Buffer performs neither
-    // cudaMalloc nor cudaMemcpy for an empty vector and exposes a null pointer.
-    Buffer<short> buckets(batch.buckets);
+    SpectrumDeviceLease spectrumLease(*batch.spectra);
+    const auto& peaks = *batch.spectra->devicePeaks;
+    const auto& classes = *batch.spectra->deviceClasses;
+    const auto& buckets = *batch.spectra->deviceBuckets;
+    const auto& table = *batch.spectra->deviceTable;
     Buffer<Top> initialTop(batch.initialTop), finalTop(batch.initialTop.size());
     Buffer<Result> results(size);
     Buffer<ScanCounts> counts(scanCount);
     if (size) setCandidateRanges<<<(size + 127) / 128, 128>>>(scans.p, candidates.p, size);
     synced();
     output.allocationAndUploadSeconds = now() - uploadStart;
+    MVH_PROFILE_END(uploadRange);
 #ifdef MVH_CUDA_ENABLE_RT
     if (matchBackend!="cuda") {
+        MVH_PROFILE_SCOPE("mvh/rt/prepare_or_reuse");
         using mvh_rt_gpu::GeometryKind;
         const auto geometry =
             matchBackend == "rt-custom" ? GeometryKind::Spheres :
@@ -536,6 +623,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
             }
 #endif
 
+    MVH_PROFILE_BEGIN(theoryRange, "mvh/gpu/theory_cache");
     const double theoryStart = now();
     std::unique_ptr<Buffer<int>> active;
     std::unique_ptr<Buffer<uint64_t>> ionOffsets;
@@ -571,6 +659,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     }
     if (!output.chargeStride) { active.reset(); ionOffsets.reset(); }
     output.theorySeconds = now() - theoryStart;
+    MVH_PROFILE_END(theoryRange);
 
     // Diagnostics allocate their reference only after theory-cache decisions.
     // They never replace the RT results used by the actual top-candidate filter.
@@ -578,6 +667,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     if (scoreImpactEnabled) scoreReference = std::make_unique<Buffer<Result>>(size);
     Result *bucketResults = scoreReference ? scoreReference->p : results.p;
 
+    MVH_PROFILE_BEGIN(scoringRange, "mvh/gpu/match_and_score");
     CudaEvent kernelStart, kernelEnd;
     check(cudaEventRecord(kernelStart.event));
     if (size && (matchBackend=="cuda" || matchBackend=="rt-audit" || scoreImpactEnabled)) ScoreSequenceVsSpectrum<<<(size + 127) / 128, 128>>>(scans.p,
@@ -617,18 +707,22 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     float milliseconds=0;
     check(cudaEventElapsedTime(&milliseconds, kernelStart.event, kernelEnd.event));
     output.kernelSeconds = milliseconds / 1000.0;
+    MVH_PROFILE_END(scoringRange);
 
     if (scoreReference) {
         output.scoreImpact = collectScoreImpact(candidates.p, size, scoreReference->p, results.p);
         scoreReference.reset();
     }
 
+    MVH_PROFILE_BEGIN(retentionRange, "mvh/gpu/retain_top");
     const double retentionStart = now();
     scorePeptidesMVH<<<(scanCount + 127) / 128, 128>>>(scans.p, scanCount,
         candidates.p, peptides.p, initialTop.p, finalTop.p, results.p, counts.p);
     synced();
     output.retentionSeconds = now() - retentionStart;
+    MVH_PROFILE_END(retentionRange);
 
+    MVH_PROFILE_BEGIN(compactionRange, "mvh/gpu/compact_results");
     const double compactStart = now();
     Buffer<int> selected(size), selectedCount(1);
     int eventCount = size;
@@ -660,9 +754,13 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         synced();
     }
     output.compactionSeconds = now() - compactStart;
+    MVH_PROFILE_END(compactionRange);
+    MVH_PROFILE_BEGIN(downloadRange, "mvh/gpu/download_results");
     const double downloadStart = now();
     events.read(output.events); finalTop.read(output.finalTop); counts.read(output.counts);
     output.downloadSeconds = now() - downloadStart;
+    MVH_PROFILE_END(downloadRange);
+    MVH_PROFILE_RESUME(deviceCleanupRange);
     return output;
 }
 
@@ -723,6 +821,8 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
 } // namespace
 
 void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *> &peptides) {
+    MVH_PROFILE_SCOPE("mvh/batch/score_and_restore");
+    MVH_PROFILE_DEFER(batchCleanupRange, "mvh/host/release_packed_batch");
     initialize();
     const double start = now();
     const Config config = configuration();
@@ -742,7 +842,9 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
                                                peptide->sPeptide);
         }
     }
+    MVH_PROFILE_BEGIN(restoreRange, "mvh/host/restore_results");
     const auto counts = restoreScoringResults(scans, batch, output);
+    MVH_PROFILE_END(restoreRange);
     const double restored = now();
     std::cout << std::setprecision(12)
               << "[CUDA scoring] candidates=" << batch.assignment->candidates->n
@@ -762,8 +864,14 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
               << " downloaded_events=" << output.events.size()
               << " restored_merges=" << counts.restoredMerges
               << " restored_scores=" << counts.restoredScores
-              << " device_bucket_entries=" << batch.buckets.size()
+              << " device_bucket_entries=" << batch.spectra->buckets.size()
+              << " spectrum_device_bytes=" << (batch.spectra->peaks.size() * sizeof(double)
+                  + batch.spectra->classes.size() * sizeof(int)
+                  + batch.spectra->buckets.size() * sizeof(short)
+                  + batch.spectra->lnTable.size() * sizeof(double))
+              << " spectrum_cache=" << (keepSpectraOnDevice ? "device" : "host")
               << " backend=" << matchBackend << " verified=" << verification << '\n';
+    MVH_PROFILE_RESUME(batchCleanupRange);
 }
 
 }
@@ -780,7 +888,61 @@ void runContractTests(){
         Buffer<double>dp(list.pPeaks),dq(q),dt(t);Buffer<int>dc(classes),result(q.size());Buffer<short>dh(list.pMassHub);
         matchContract<<<1,128>>>(s,dp.p,dc.p,dh.p,dq.p,dt.p,q.size(),result.p);synced();std::vector<int>got;result.read(got);
         for(size_t i=0;i<q.size();++i){char c=list.findNear(q[i],t[i]);int expected=c==list.end()?0:c;require(got[i]==expected,"findNear boundary/tie contract");}
-        require(got[0]==0&&got[1]==2,"strict tolerance and first-encountered tie");
+        require(got[0]==0&&got[1]==3,"strict tolerance and highest-class priority");
+    }
+    {
+        struct PeakSelectionCase {
+            const char* name;
+            std::map<double, char> peaks;
+            double query, tolerance;
+            int expectedClass;
+        };
+        // Exactly representable distances keep these boundary cases unambiguous.
+        const std::vector<PeakSelectionCase> cases{
+            {"higher class beats exact mass", {{100.0,1},{100.0625,3}}, 100.0,0.125,3},
+            {"outside higher class cannot mask a hit", {{100.0,1},{100.25,3}}, 100.0,0.125,1},
+            {"zero class cannot mask a positive hit", {{100.0,0},{100.0625,1}}, 100.0,0.125,1},
+            {"zero class alone is unscored", {{100.0,0}}, 100.0,0.125,0},
+            {"strict tolerance boundary", {{100.125,3}}, 100.0,0.125,0},
+            {"inside tolerance", {{100.125,3}}, 100.0,0.25,3},
+            {"class priority across buckets", {{99.9375,3},{100.0,1}}, 100.0,0.125,3},
+            {"same class candidates", {{99.9375,2},{100.03125,2}}, 100.0,0.125,2},
+            {"no in-range peak", {{100.25,3}}, 100.0,0.125,0},
+            {"empty spectrum", {}, 100.0,0.125,0},
+            {"zero tolerance", {{100.0,3}}, 100.0,0.0,0},
+        };
+        for (const auto& test : cases) {
+            auto peakData = test.peaks;
+            PeakList reference(&peakData);
+            Scan scan{};
+            scan.peaks = reference.size();
+            if (scan.peaks) {
+                scan.lowest = reference.iLowestMass;
+                scan.highest = reference.iHighestMass;
+            }
+            // Exercise offsets as well as selection; prefix entries must be ignored.
+            scan.peakOffset = 1;
+            scan.hubOffset = 2;
+            std::vector<double> masses{0.0};
+            masses.insert(masses.end(), reference.pPeaks.begin(), reference.pPeaks.end());
+            std::vector<int> classes{3};
+            for (char cls : reference.pClasses) classes.push_back(cls);
+            std::vector<short> buckets{-1, -1};
+            buckets.insert(buckets.end(), reference.pMassHub.begin(), reference.pMassHub.end());
+            Buffer<double> deviceMasses(masses), query(std::vector<double>{test.query}),
+                           tolerance(std::vector<double>{test.tolerance});
+            Buffer<int> deviceClasses(classes), result(1);
+            Buffer<short> deviceBuckets(buckets);
+            matchContract<<<1,1>>>(scan, deviceMasses.p, deviceClasses.p, deviceBuckets.p,
+                                  query.p, tolerance.p, 1, result.p);
+            synced();
+            std::vector<int> actual;
+            result.read(actual);
+            const char cpuClass = reference.findNear(test.query, test.tolerance);
+            const int expectedCpu = cpuClass == reference.end() ? 0 : cpuClass;
+            require(expectedCpu == test.expectedClass, std::string("CPU peak selection: ") + test.name);
+            require(actual[0] == test.expectedClass, std::string("CUDA peak selection: ") + test.name);
+        }
     }
     {
         // Inclusive endpoints, duplicated boundary entries, no match, and

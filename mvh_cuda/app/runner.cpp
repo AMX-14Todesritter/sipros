@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "engine.h"
+#include "profiling.h"
 #include "mvh_scan_vector.h"
 #include <iomanip>
 #include <stdexcept>
@@ -32,6 +33,8 @@ std::size_t writePsms(const std::string &path, const std::string &input,
 
 void mvh_app::run(const std::string &input, const std::string &config,
                   const std::string &fasta, const std::string &output, int threads) {
+    MVH_PROFILE_SCOPE("mvh/run");
+    MVH_PROFILE_BEGIN(loadRange, "mvh/run/config_and_load");
     mvh_cuda::MatchBackendScope matchResources;
     omp_set_num_threads(1); // Interface retains -t; CUDA replaces CPU parallel work.
     std::cout << "Requested CPU threads: " << threads << "; CUDA execution uses no OpenMP compute loops\n";
@@ -50,14 +53,19 @@ void mvh_app::run(const std::string &input, const std::string &config,
     MvhScanVector spectra(input, output, config, true);
     if (!spectra.loadMassData()) throw std::runtime_error("Cannot load spectra");
     const double loaded = omp_get_wtime();
+    MVH_PROFILE_END(loadRange);
     const auto &scans = spectra.vpAllMS2Scans;
     if (scans.empty()) throw std::runtime_error("No scans loaded");
+    MVH_PROFILE_BEGIN(preprocessRange, "mvh/run/preprocess_scans");
     spectra.preProcessAllMs2Mvh();
+    MVH_PROFILE_END(preprocessRange);
     const double prepared = omp_get_wtime();
     spectra.searchDatabaseMvh();
     const double searched = omp_get_wtime();
+    MVH_PROFILE_BEGIN(exportRange, "mvh/run/export_psms");
     const auto count = writePsms((std::filesystem::path(output)/"mvh_psms.tsv").string(), input, scans);
     const double exported = omp_get_wtime();
+    MVH_PROFILE_END(exportRange);
     std::size_t skipped=0;
     for (const auto *scan : scans) if (scan->bSkip) ++skipped;
     std::ofstream report(std::filesystem::path(output)/"run_summary.tsv");
@@ -65,6 +73,7 @@ void mvh_app::run(const std::string &input, const std::string &config,
     report << std::setprecision(17) << "metric\tvalue\n"
            << "match_backend\t" << mvh_cuda::matchBackendName() << '\n'
            << "backend\tcuda\n"
+           << "spectrum_cache\t" << (mvh_cuda::spectrumDeviceCache() ? "device" : "host") << '\n'
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
            << "peptide_batch_size\t" << mvh_cuda::peptideBatchSize() << '\n'
            << "config_and_load_seconds\t" << loaded-begin << '\n'

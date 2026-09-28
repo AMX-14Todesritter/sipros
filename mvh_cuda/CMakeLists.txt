@@ -10,6 +10,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenMP REQUIRED)
+option(MVH_ENABLE_PROFILING "Enable coarse host NVTX ranges for Nsight Systems" OFF)
+add_library(mvh_profiling INTERFACE)
+if(MVH_ENABLE_PROFILING)
+  find_path(MVH_NVTX_INCLUDE_DIR nvtx3/nvToolsExt.h
+    HINTS ${CUDAToolkit_INCLUDE_DIRS} REQUIRED)
+  target_include_directories(mvh_profiling INTERFACE "${MVH_NVTX_INCLUDE_DIR}")
+  target_compile_definitions(mvh_profiling INTERFACE MVH_ENABLE_PROFILING=1)
+  # NVTX3 is header-only; on Linux its injection loader uses libdl.
+  target_link_libraries(mvh_profiling INTERFACE ${CMAKE_DL_LIBS})
+endif()
 get_filename_component(SIPROS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 # Shared vendor dependency; no duplicated MSToolkit checkout.
 include_directories("${SIPROS_ROOT}/MSToolkit/include")
@@ -30,7 +40,7 @@ target_include_directories(mvh_original PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/cuda"
   "${CMAKE_CURRENT_SOURCE_DIR}/original/include")
-target_link_libraries(mvh_original PUBLIC mstoolkit OpenMP::OpenMP_CXX CUDA::cudart)
+target_link_libraries(mvh_original PUBLIC mstoolkit OpenMP::OpenMP_CXX CUDA::cudart mvh_profiling)
 if(MSVC)
   target_compile_options(mvh_original PRIVATE /fp:fast /openmp:experimental /openmp:llvm /arch:AVX2)
 else()
@@ -124,3 +134,7 @@ endif()
 add_test(NAME output_directory_contract
   COMMAND ${Python3_EXECUTABLE} -B "${SIPROS_ROOT}/shared/tests/check_output_paths.py"
           --binary $<TARGET_FILE:sipros_mvh_cuda> --component mvh_cuda)
+
+add_executable(sequence_ids_contract tests/sequence_ids_contract.cpp)
+target_include_directories(sequence_ids_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_test(NAME sequence_ids_contract COMMAND sequence_ids_contract)

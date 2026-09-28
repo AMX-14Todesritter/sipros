@@ -7,7 +7,7 @@
     "README.md": "c9e925c4e03556e357ee3914091d129d26eb93e88a871cdf7ea6c38936da2175",
     "VALIDATION.md": "147ea83046771838fc26894f6259c50af4159fd31bc321dedf1349486b6924e4",
     "tests/source_methods.py": "c8d80aadde20ad1ee6e1797e697bf4892951458f8c0d65e99c2aa561a97182be",
-    "tests/verify_original.py": "13badd184c4ed6a751f8f6cb9aec907d945b8390179c1790094716ea000ea245",
+    "tests/verify_original.py": "b6b971068dba5530f60fa3e197e006be67b3ba56a079a5baba52720a7036df7f",
     "tests/check_run.py": "eafa9ec6160d3b08b5553ea82e68ae6685096571931673af1a3cee2baadc6d80",
     "tests/verify_extraction.py": "4359074acbf87938240050e8592ed904d2894bcc896999fa9e38f38658a3e5a8",
     "tests/data/search.cfg": "04ba2a4c120ac7207f34fce774169ced522f05e53f59398d955029705cf198e6",
@@ -41,7 +41,7 @@
     "original/src/averagine.cpp": "670e38020f054524ce7526ecba5a4624b041290bb17e321a2c03f5b220415423",
     "original/src/ptm.cpp": "5a5d49a731f1391bd46d02e17bbf872021c64651f5e4a8bb42c5ec3bbdaec061",
     "original/src/proNovoConfig.cpp": "460893f00b4476a37d67ea566f6cbe71cc6472e8d0357898455cb8801bf52855",
-    "original/src/ms2scan.cpp": "4b870227ffb48a5db990cab3bf91ce2afab2f19f08cbadd04f0ec2e4000b4f3d",
+    "original/src/ms2scan.cpp": "aaafb8a5b46da7a24b3d2b081f14dcfcb7a97df18e41445d058a3543d6f35989",
     "original/src/tokenvector.cpp": "cad0e7ce52e9113710a1c205f9f74cbdef36b8b4ac80ff5c4c934a7fe2dc0d3e",
     "original/src/isotopologue.cpp": "a4822e728d7faf415ddd6553eacbb9f796cbee418c4e89e8a01fca36a1e0e922",
     "original/src/proteindatabase.cpp": "fe89001102a74eccf0820e588847e7c0c045b90fd57838d839468b2b8808167a"
@@ -67,5 +67,9 @@
         "after": "c9e925c4e03556e357ee3914091d129d26eb93e88a871cdf7ea6c38936da2175"
       }
     }
+  },
+  "intentional_changes": {
+    "original/src/ms2scan.cpp": "PeakList::findNear now chooses the highest positive class strictly within tolerance, then nearest m/z. Other original methods retain upstream identity.",
+    "tests/verify_original.py": "Allow only the intentional PeakList::findNear change and require CPU/CUDA reference implementations to agree."
   }
 }

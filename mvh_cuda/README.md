@@ -121,3 +121,69 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 需要量化 RT 对 MVH 分数及最终 top 候选的影响时，使用 [评分影响验证脚本](../MVH_RT/gpu_bridge/README.md#用-mvh-分数和最终-top-候选评估差异)。`--score-impact` 为显式诊断开关，默认关闭，诊断耗时不作性能指标。
 
 实验 RT 构建可选 `--match-backend rt-custom`，当前采用 `(m/z, 原始 class, 0)` 内置 sphere 和向下 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
+
+Optional, default-off NVTX stage instrumentation and separate profiling builds:
+[PROFILING.md](PROFILING.md). Enable with `-DMVH_ENABLE_PROFILING=ON`; use `OFF`
+and rebuild to remove all application NVTX range calls from the normal build.
+
+### Shared GPU input packing
+
+All CUDA-based matchers (CUDA buckets, RT triangles, instanced triangles and
+RT spheres) use the same optimized packing path. Fixed experimental peak arrays,
+classes, lookup tables and scan metadata are packed once per dataset. Each batch
+still updates its candidate ranges and current top list.
+
+- `--spectrum-cache host` (default): reuse packed host arrays; allocate/upload and
+  release their GPU copies for each scoring batch. This avoids keeping these
+  device copies alive during the next candidate-association stage.
+- `--spectrum-cache device`: also keep those GPU copies between batches. This can
+  reduce transfers but may raise peak VRAM during association and influence the
+  existing theoretical-ion cache policy. CUDA includes its mass buckets; pure RT
+  does not. The scoring log records `spectrum_device_bytes` and `spectrum_cache`.
+
+Both modes retain fixed host arrays for the dataset; they are reset before scan
+preprocessing and at the end of the search scope. Candidate/top metadata remains
+batch-local. The sphere geometry, tracing policy and scoring formula are unchanged.
+
+`BatchSequenceIds` in `include/sequence_ids.h` owns its key text and hash nodes in
+one batch arena. It preserves first-seen IDs and exact string comparison, including
+when a top-candidate string is replaced during result restoration. It does not
+borrow mutable strings or preserve sequence IDs across batches. This reduces
+individual allocations/deallocations without adding a custom hash-table algorithm.
+
+The validation build is `build/mvh_rt/packing_optimized` (profiling ON). The earlier
+`profile_enabled` binary was kept as the comparison baseline. To profile the new
+build, explicitly select it:
+
+```bash
+bash MVH_RT/gpu_bridge/run_profile.sh --dataset marine --batch 6000000 \
+  --binary /workspace/sipros/build/mvh_rt/packing_optimized/bin/sipros_mvh_cuda \
+  --spectrum-cache host
+```
+
+Change `host` to `device` to evaluate the memory/speed tradeoff. Rebuild the chosen
+build directory after source changes. Normal benchmark scripts still select
+`gpu_integration`, so rebuild that directory before using them for the optimized
+version. Keep baseline and optimized measurements identified by binary hash.
+
+## Peak selection: positive class priority
+
+The default CUDA bucket matcher now uses the same rule as the modified CPU
+`PeakList::findNear`: first require `abs(peakMz - queryMz) < tolerance` and
+`class > 0`, then prefer the larger class number, breaking equal-class ties by
+smaller distance. Exact class/distance ties retain the first encountered peak.
+Class 0 is excluded from candidate selection; no hit contributes to MVH's
+unmatched bin. Raw class numbers are not remapped (class 1 remains the strongest
+intensity group assigned by preprocessing).
+
+This changes peak selection from the historical nearest-mass baseline. Existing
+benchmark PSM hashes describe their original binaries, not the new rule. The
+CPU verifier in `original/src/ms2scan.cpp` is synchronized with `mvh/`; source
+identity tests permit only this matcher to differ from upstream. All other
+upstream methods and the MVH scoring formula remain checked.
+
+The triangle and sphere tracing implementations are not changed by this matcher
+update. Sphere still uses float geometric intersection, so boundary agreement
+with the double-precision CPU/CUDA rule must be validated separately.
+
+A separate verified build for this change is `build/mvh_rt/class_priority`.

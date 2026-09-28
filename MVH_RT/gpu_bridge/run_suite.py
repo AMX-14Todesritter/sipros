@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared.output_paths import resolve_output
 
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('--dataset', choices=['smoke', 'ecoli', 'marine'], default='smoke')
+p.add_argument('--dataset', choices=['smoke', 'ecoli', 'marine','soil'], default='smoke')
 p.add_argument('--fasta', type=Path, help='Override dataset FASTA')
 p.add_argument('--scans', type=Path, help='Override dataset FT2')
 p.add_argument('--config', type=Path, help='Override dataset configuration')
@@ -28,7 +28,7 @@ if a.batch < 1 or a.repeats < 1 or len(set(a.backends)) != len(a.backends):
 root = Path(__file__).resolve().parents[2]
 data = root / 'mvh_cuda/tests/data'
 smoke = a.dataset == 'smoke'
-fasta = a.fasta or (data/'proteins.fasta' if smoke else root/'raw'/('Marine_fw_3rev.fasta' if a.dataset=='marine' else 'Ecoli.fasta'))
+fasta = a.fasta or (data/'proteins.fasta' if smoke else root/'raw'/('Marine_fw_3rev.fasta' if a.dataset=='marine' else ('Soil_fw_3rev.fasta' if a.dataset== 'soil' else 'Ecoli.fasta')))
 scans = a.scans or (data/'sample.ft2' if smoke else root/'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2')
 config = a.config or (data/'search.cfg' if smoke else root/'experiments/Regular.cfg')
 for f in (fasta, scans, config):

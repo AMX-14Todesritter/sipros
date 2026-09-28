@@ -215,3 +215,12 @@ docker exec sipros-sipros-1 python3 -B MVH_RT/gpu_bridge/validate_score_impact.p
 人工设计入口、资源复用约定和验证命令见 [CUSTOM_MATCHING.md](CUSTOM_MATCHING.md)。
 
 Sphere 场景资源与构建已独立到 `sphere_backend.cpp`；旧三角形场景在 `triangle_backend.cpp`。`bridge.cpp` 只分发后端，公共 GAS/SBT/上传逻辑在 `scene_resources.cpp`。射线设计继续修改 `custom_device.cu`。
+
+### Parameterized NSYS / NCU profiling
+
+Run `bash MVH_RT/gpu_bridge/run_profile.sh --dataset marine --batch 6000000`
+from WSL. Defaults to sphere, a complete NSYS timeline followed by one NCU
+scoring launch with early termination. Use `--tools nsys`, `--tools ncu`,
+`--ncu-launch-skip`, `--ncu-launch-count`, or `--dry-run` as needed.
+See [profiling instructions](../../mvh_cuda/PROFILING.md) for parameters and
+limitations. This script uses the separate `profile_enabled` binary.

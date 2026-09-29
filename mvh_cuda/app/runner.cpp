@@ -33,6 +33,9 @@ std::size_t writePsms(const std::string &path, const std::string &input,
 
 void mvh_app::run(const std::string &input, const std::string &config,
                   const std::string &fasta, const std::string &output, int threads) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    mvh_flow::reset();
+#endif
     MVH_PROFILE_SCOPE("mvh/run");
     MVH_PROFILE_BEGIN(loadRange, "mvh/run/config_and_load");
     mvh_cuda::MatchBackendScope matchResources;
@@ -84,5 +87,8 @@ void mvh_app::run(const std::string &input, const std::string &config,
            << "skipped_scan_count\t" << skipped << '\n'
            << "retained_psm_count\t" << count << '\n';
     report.close();
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    mvh_flow::write(output,searched-prepared,count);
+#endif
     std::cout << "MVH results: " << output << "\nSearch seconds: " << searched-prepared << '\n';
 }

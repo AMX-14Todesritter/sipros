@@ -337,6 +337,10 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
     check(cudaGetLastError());
     MVH_PROFILE_END(rangeKernelRange);
     const uint64_t associations = exclusiveOffsets(counts, offsets);
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    mvh_flow::totals["total_peptide_entries"] += peptides.size();
+    mvh_flow::totals["total_precursor_associations"] += associations;
+#endif
     require(associations <= size_t(std::numeric_limits<int>::max()),
             "candidate batch exceeds CUB int indexing; lower the peptide batch size");
     batch->candidates = std::make_unique<Buffer<Candidate>>(associations);
@@ -688,6 +692,16 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
             output.chargeStride = stride;
         }
     }
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    // Allocate after BOTH cudaMemGetInfo cache decisions, retaining the original
+    // cache policy. Contract calls also use this path; runner resets totals.
+    Buffer<mvh_flow::Counters> flow(mvh_flow::Shards);
+    check(cudaMemset(flow.p,0,flow.n*sizeof(mvh_flow::Counters)));
+    Config observedConfig=config;
+    observedConfig.flow=flow.p;
+    if(active) countCacheWork<<<(keys+127)/128,128>>>(keys,active->p,ionOffsets->p,
+                                                  output.chargeStride!=0,observedConfig);
+#endif
     if (!output.chargeStride) { active.reset(); ionOffsets.reset(); }
     output.theorySeconds = now() - theoryStart;
     MVH_PROFILE_END(theoryRange);
@@ -697,13 +711,19 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     std::unique_ptr<Buffer<Result>> scoreReference;
     if (scoreImpactEnabled) scoreReference = std::make_unique<Buffer<Result>>(size);
     Result *bucketResults = scoreReference ? scoreReference->p : results.p;
+    Config scoringConfig=config;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    // rt-audit retains the CUDA result; score-impact retains the selected RT
+    // result. Count only the primary search, never its diagnostic reference.
+    if(matchBackend=="cuda" || matchBackend=="rt-audit") scoringConfig=observedConfig;
+#endif
 
     MVH_PROFILE_BEGIN(scoringRange, "mvh/gpu/match_and_score");
     CudaEvent kernelStart, kernelEnd;
     check(cudaEventRecord(kernelStart.event));
     if (size && (matchBackend=="cuda" || matchBackend=="rt-audit" || scoreImpactEnabled)) ScoreSequenceVsSpectrum<<<(size + 127) / 128, 128>>>(scans.p,
         candidates.p, size, peptides.p, texts.p, peaks.p, classes.p, buckets.p,
-        table.p, bucketResults, config, ionOffsets ? ionOffsets->p : nullptr,
+        table.p, bucketResults, scoringConfig, ionOffsets ? ionOffsets->p : nullptr,
         active ? active->p : nullptr, cachedIons ? cachedIons->p : nullptr,
         output.chargeStride);
     check(cudaGetLastError());
@@ -716,6 +736,9 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         p.peptides=peptides.p; p.texts=texts.p; p.peaks=peaks.p;
         p.classes=classes.p; p.hub=buckets.p; p.lnTable=table.p;
         p.results=auditResults ? auditResults->p : results.p; p.cfg=config;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        if(matchBackend!="rt-audit") p.cfg=observedConfig;
+#endif
         p.ionOffsets=ionOffsets ? ionOffsets->p : nullptr;
         p.ionValid=active ? active->p : nullptr;
         p.cachedIons=cachedIons ? cachedIons->p : nullptr;
@@ -741,6 +764,9 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     float milliseconds=0;
     check(cudaEventElapsedTime(&milliseconds, kernelStart.event, kernelEnd.event));
     output.kernelSeconds = milliseconds / 1000.0;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    mvh_flow::time("gpu/scoring_fused",output.kernelSeconds);
+#endif
     MVH_PROFILE_END(scoringRange);
 
     if (scoreReference) {
@@ -793,6 +819,40 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     const double downloadStart = now();
     events.read(output.events); finalTop.read(output.finalTop); counts.read(output.counts);
     output.downloadSeconds = now() - downloadStart;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    std::vector<mvh_flow::Counters> flowHost;
+    flow.read(flowHost);
+    uint64_t v[mvh_flow::MetricCount]{};
+    for(const auto &shard:flowHost)for(int i=0;i<mvh_flow::MetricCount;++i)v[i]+=shard.v[i];
+    using namespace mvh_flow;
+    auto add=[&](const char *name,uint64_t value){totals[name]+=value;};
+    add("total_associations_entering_fragment_stage",v[Entered]);
+    add("total_associations_rejected_before_fragment_stage",v[Rejected]);
+    add("total_associations_with_queries",v[WithQuery]);
+    add("total_associations_with_at_least_one_fragment_hit",v[WithHit]);
+    add("total_associations_with_zero_fragment_hits",v[Entered]-v[WithHit]);
+    add("total_fragment_queries",v[Queries]);add("total_fragment_hits",v[Hits]);
+    add("total_fragment_misses",v[Queries]-v[Hits]);
+    add("total_backend_scored_fragment_hits",v[ScoredHits]);
+    add("total_ions_offered_to_associations",v[OfferedIons]);
+    add("total_ions_outside_scan_range",v[OfferedIons]-v[Queries]);
+    add("total_associations_entering_mvh_scoring",v[Mvh]);
+    add("total_mvh_scores_computed",v[Mvh]);
+    add("total_invalid_ion_sequences",v[Invalid]);
+    add("total_direct_generation_calls",v[DirectCalls]);
+    add("total_cache_count_generation_calls",v[CacheCountCalls]);
+    add("total_cache_store_generation_calls",v[CacheStoreCalls]);
+    add("total_theoretical_ion_generation_calls",v[DirectCalls]+v[CacheCountCalls]+v[CacheStoreCalls]);
+    add("total_theoretical_fragment_ions_generated",v[DirectIons]+v[CacheCountIons]+v[CacheStoreIons]);
+    add("total_direct_generated_ions",v[DirectIons]);
+    add("total_cache_count_ions",v[CacheCountIons]);add("total_cache_stored_ions",v[CacheStoreIons]);
+    uint64_t accepted=0,merged=0;
+    for(const auto &e:output.events){accepted+=e.result.status==ResultAccepted;merged+=e.result.status==ResultMerged;}
+    add("total_candidates_retained_after_mvh",accepted);
+    add("total_merged_candidate_events",merged);
+    std::cout<<"[FLOW batch] associations="<<size<<" entered="<<v[Entered]
+             <<" queries="<<v[Queries]<<" hits="<<v[Hits]<<" mvh="<<v[Mvh]<<" accepted="<<accepted<<'\n';
+#endif
     MVH_PROFILE_END(downloadRange);
     MVH_PROFILE_RESUME(deviceCleanupRange);
     return output;

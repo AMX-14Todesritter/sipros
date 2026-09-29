@@ -11,7 +11,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenMP REQUIRED)
 option(MVH_ENABLE_PROFILING "Enable detailed host NVTX ranges for Nsight Systems" OFF)
+option(MVH_ENABLE_FLOW_COUNTERS "Collect full candidate/fragment flow counters (diagnostic build)" OFF)
 add_library(mvh_profiling INTERFACE)
+set(MVH_FLOW_PTX_FLAGS)
+if(MVH_ENABLE_FLOW_COUNTERS)
+  target_compile_definitions(mvh_profiling INTERFACE MVH_ENABLE_FLOW_COUNTERS=1)
+  list(APPEND MVH_FLOW_PTX_FLAGS -DMVH_ENABLE_FLOW_COUNTERS=1)
+endif()
 target_include_directories(mvh_profiling INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MVH_ENABLE_PROFILING)
   find_path(MVH_NVTX_INCLUDE_DIR nvtx3/nvToolsExt.h
@@ -87,21 +93,21 @@ if(MVH_CUDA_ENABLE_RT)
   set(GPU_RT_DIR "${SIPROS_ROOT}/MVH_RT/gpu_bridge")
   set(GPU_RT_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt.ptx")
   add_custom_command(OUTPUT "${GPU_RT_PTX}"
-    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" ${MVH_FLOW_PTX_FLAGS} --ptx --std=c++17 --gpu-architecture=compute_75
       --generate-line-info --fmad=false "-I${OPTIX_INCLUDE_DIR}"
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/device.cu" -o "${GPU_RT_PTX}"
     DEPENDS "${GPU_RT_DIR}/device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh include/flow_profile.h VERBATIM)
   add_custom_target(mvh_gpu_rt_ptx DEPENDS "${GPU_RT_PTX}")
   set(GPU_RT_CUSTOM_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_custom.ptx")
   add_custom_command(OUTPUT "${GPU_RT_CUSTOM_PTX}"
-    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" ${MVH_FLOW_PTX_FLAGS} --ptx --std=c++17 --gpu-architecture=compute_75
       --generate-line-info --fmad=false "-I${OPTIX_INCLUDE_DIR}"
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_CUSTOM_PTX}"
     DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh include/flow_profile.h VERBATIM)
   add_custom_target(mvh_gpu_rt_custom_ptx DEPENDS "${GPU_RT_CUSTOM_PTX}")
   add_library(mvh_gpu_rt STATIC "${GPU_RT_DIR}/bridge.cpp"
     "${GPU_RT_DIR}/sphere_backend.cpp" "${GPU_RT_DIR}/triangle_backend.cpp"
@@ -140,3 +146,16 @@ add_test(NAME output_directory_contract
 add_executable(sequence_ids_contract tests/sequence_ids_contract.cpp)
 target_include_directories(sequence_ids_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_test(NAME sequence_ids_contract COMMAND sequence_ids_contract)
+
+if(MVH_ENABLE_FLOW_COUNTERS)
+  add_executable(flow_observer_contract tests/flow_observer_contract.cu)
+  target_link_libraries(flow_observer_contract PRIVATE CUDA::cudart mvh_profiling)
+  add_test(NAME flow_observer_contract COMMAND flow_observer_contract)
+  if(NOT MVH_ENABLE_PROFILING)
+    message(FATAL_ERROR "Flow counters require MVH_ENABLE_PROFILING=ON for timing output")
+  endif()
+  if(MVH_CUDA_ENABLE_RT)
+    add_test(NAME flow_profile_identities COMMAND ${Python3_EXECUTABLE} -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_flow_profile.py" --binary $<TARGET_FILE:sipros_mvh_cuda>)
+  endif()
+endif()

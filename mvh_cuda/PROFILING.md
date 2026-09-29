@@ -1,5 +1,11 @@
 # Detailed RT / CUDA function timing with Nsight Systems
 
+For complete peptide/association/fragment/MVH counters, geometric-hit semantics,
+cache generation-call accounting, and counters-off timing comparison, see
+[FLOW_PROFILING.md](FLOW_PROFILING.md). This is a separate, default-off
+`MVH_ENABLE_FLOW_COUNTERS` diagnostic build; it does not change scoring or filtering.
+
+
 `MVH_ENABLE_PROFILING` defaults to `OFF`. When enabled, host code emits NVTX3 ranges. It does not change matching, MVH arithmetic, candidate ordering, ray generation, geometry, or synchronization. Device kernels and OptiX PTX receive no NVTX instrumentation.
 
 The interface is isolated in `include/profiling.h`. Disabled macros expand to `((void)0)`: no range objects, label evaluation, NVTX headers, or NVTX linkage are required. Existing CUB/OptiX library NVTX ranges can still appear in OFF captures; the switch controls only the application ranges added here. Enabled builds use the CUDA toolkit's header-only NVTX3 and its platform loader (`libdl` on Linux).

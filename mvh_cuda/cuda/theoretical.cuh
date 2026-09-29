@@ -44,4 +44,23 @@ __global__ void generateTheoreticalIons(const PeptideInput *peptides, const char
     CalculateSequenceIons(texts + peptides[key / stride].text,
                           key % stride, config, ions);
 }
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+// Launched only AFTER cache memory-policy decisions; no diagnostic allocation
+// may change cudaMemGetInfo-based cache admission.
+__global__ void countCacheWork(int size, const int *active, const uint64_t *offsets,
+                                bool stored, Config cfg) {
+    const int key=blockIdx.x*blockDim.x+threadIdx.x;
+    if(key>=size || !active[key]) return;
+    flowAdd(cfg,key,mvh_flow::CacheCountCalls,1);
+    if(active[key]>0) {
+        const auto n=offsets[key+1]-offsets[key];
+        flowAdd(cfg,key,mvh_flow::CacheCountIons,n);
+        if(stored) {
+            flowAdd(cfg,key,mvh_flow::CacheStoreCalls,1);
+            flowAdd(cfg,key,mvh_flow::CacheStoreIons,n);
+        }
+    }
+}
+#endif
+
 }

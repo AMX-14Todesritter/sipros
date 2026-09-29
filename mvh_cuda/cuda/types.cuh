@@ -1,6 +1,7 @@
 #pragma once
 #include "../include/profiling.h"
 #include <cuda_runtime.h>
+#include "../include/flow_profile.h"
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,9 @@ struct Config {
     double tic,multiplier,fragmentTolerance,parentTolerance,mzLow,mzHigh,water,proton,yWater;
     double mass[256];
     double missingMass;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    mvh_flow::Counters *flow;
+#endif
 };
 struct RawScan { uint64_t offset; int count,charge; double parentMass,parentMz; };
 struct PrepResult { int count,skip,totalBins,counts[MaxClasses+1]; double sum,max; };

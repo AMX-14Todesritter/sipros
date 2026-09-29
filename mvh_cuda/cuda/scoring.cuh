@@ -78,11 +78,39 @@ __device__ int findNear(double mz, double tolerance, const Scan &scan,
     return bestClass >= 0 ? bestClass : 0;
 }
 
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+__device__ inline void flowAdd(const Config &cfg, int index, mvh_flow::Metric metric,
+                               unsigned long long value) {
+    if (cfg.flow && value) atomicAdd(&cfg.flow[index & (mvh_flow::Shards-1)].v[metric], value);
+}
+#endif
+
 struct IonCounter {
     const Scan &scan;const Config &cfg;const double *peaks;const int *classes;const short *hub;
     int key[MaxClasses+1],predicted=0,matched=0;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    uint64_t offered=0, geometricHits=0;
+    // Observer only: existence of ANY retained experimental peak strictly inside
+    // the configured double-precision tolerance, including class 0. This does
+    // not replace the backend matcher or affect its class selection/score.
+    __device__ void observe(double mz) {
+        if (!cfg.flow) return;
+        ++offered;
+        if (mz<scan.lower || mz>scan.upper) return;
+        int lo=0, hi=scan.peaks;
+        while(lo<hi) { int mid=lo+(hi-lo)/2;
+            if(peaks[scan.peakOffset+mid]<mz) lo=mid+1; else hi=mid; }
+        bool hit=(lo<scan.peaks && fabs(peaks[scan.peakOffset+lo]-mz)<cfg.fragmentTolerance)
+              || (lo>0 && fabs(peaks[scan.peakOffset+lo-1]-mz)<cfg.fragmentTolerance);
+        geometricHits += hit;
+    }
+#endif
     __device__ IonCounter(const Scan&s,const Config&c,const double*p,const int*cl,const short*h):scan(s),cfg(c),peaks(p),classes(cl),hub(h){for(int i=0;i<=MaxClasses;++i)key[i]=0;}
-    __device__ void add(double mz){if(mz<scan.lower||mz>scan.upper)return;++predicted;
+    __device__ void add(double mz){
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        observe(mz);
+#endif
+        if(mz<scan.lower||mz>scan.upper)return;++predicted;
         int cls=findNear(mz,cfg.fragmentTolerance,scan,peaks,classes,hub);
         if(cls>0){++key[cls-1];++matched;}else ++key[cfg.classes];
     }
@@ -136,7 +164,12 @@ __device__ Result scoreCandidate(int index,
     const auto candidate = candidates[index];
     const Scan &scan = scans[candidate.scanId];
     Result result{};
-    if (scan.skip) { return result; }
+    if (scan.skip) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        flowAdd(cfg,index,mvh_flow::Rejected,1);
+#endif
+        return result;
+    }
     Counter ions(scan, cfg, peaks, classes, hub);
     bool valid;
     if (chargeStride && candidate.charge < chargeStride) {
@@ -148,6 +181,20 @@ __device__ Result scoreCandidate(int index,
         valid = CalculateSequenceIons(texts + peptides[candidate.peptideId].text,
                                       candidate.charge, cfg, ions);
     }
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    flowAdd(cfg,index,mvh_flow::Entered,1);
+    flowAdd(cfg,index,mvh_flow::OfferedIons,ions.offered);
+    flowAdd(cfg,index,mvh_flow::Queries,ions.predicted);
+    flowAdd(cfg,index,mvh_flow::Hits,ions.geometricHits);
+    flowAdd(cfg,index,mvh_flow::ScoredHits,ions.matched);
+    flowAdd(cfg,index,mvh_flow::WithHit,ions.geometricHits>0);
+    flowAdd(cfg,index,mvh_flow::WithQuery,ions.predicted>0);
+    flowAdd(cfg,index,mvh_flow::Invalid,!valid);
+    if (!(chargeStride && candidate.charge < chargeStride)) {
+        flowAdd(cfg,index,mvh_flow::DirectCalls,1);
+        flowAdd(cfg,index,mvh_flow::DirectIons,ions.offered);
+    }
+#endif
     if (!valid) { result.status = -1; return result; }
     result.predicted = ions.predicted;
     result.matched = ions.matched;
@@ -159,6 +206,9 @@ __device__ Result scoreCandidate(int index,
         value -= lnCombin(scan.totalBins, ions.predicted, lnTable);
         result.score = -value;
         result.status = ResultScored;
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        flowAdd(cfg,index,mvh_flow::Mvh,1);
+#endif
     }
     return result;
 }

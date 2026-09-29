@@ -39,6 +39,9 @@ struct SphereCounter : mvh_cuda::IonCounter {
         : IonCounter(scan, cfg, peaks, classes, hub) {}
 
     __device__ void add(double mz) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        observe(mz);
+#endif
         if (mz < scan.lower || mz > scan.upper) return;
         ++predicted;
         const auto handle = params.handles[&scan - params.scans];

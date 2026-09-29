@@ -12,6 +12,9 @@ struct RtCounter : mvh_cuda::IonCounter {
                         const double*p,const int*cl,const short*h)
         : IonCounter(s,c,p,cl,h) {}
     __device__ void add(double mz) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        observe(mz);
+#endif
         if (mz < scan.lower || mz > scan.upper) return;
         ++predicted;
         const auto handle = params.handles[&scan - params.scans];

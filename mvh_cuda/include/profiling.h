@@ -1,4 +1,5 @@
 #pragma once
+#include "flow_host.h"
 
 // Host-only, optional NVTX ranges. Disabled builds evaluate no labels and
 // contain no range objects or NVTX calls. No GPU synchronization is added.
@@ -18,12 +19,25 @@ public:
     // End/resume allows one range per generation batch, rather than one event
     // per peptide. End nested ranges first: NVTX push/pop is a thread stack.
     void end() {
-        if (active_) { nvtxRangePop(); active_ = false; }
+        if (active_) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+            mvh_flow::time(label_,std::chrono::duration<double>(std::chrono::steady_clock::now()-start_).count());
+#endif
+            nvtxRangePop(); active_ = false;
+        }
     }
     void resume() {
-        if (!active_) { nvtxRangePushA(label_); active_ = true; }
+        if (!active_) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+            start_=std::chrono::steady_clock::now();
+#endif
+            nvtxRangePushA(label_); active_ = true;
+        }
     }
 private:
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    std::chrono::steady_clock::time_point start_;
+#endif
     const char* label_;
     bool active_ = false;
 };

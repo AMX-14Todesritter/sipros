@@ -128,3 +128,7 @@ add_test(NAME output_directory_contract
 add_executable(sequence_ids_contract tests/sequence_ids_contract.cpp)
 target_include_directories(sequence_ids_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_test(NAME sequence_ids_contract COMMAND sequence_ids_contract)
+
+add_executable(sequence_ids_reuse_contract tests/sequence_ids_reuse_contract.cpp)
+target_include_directories(sequence_ids_reuse_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_test(NAME sequence_ids_reuse_contract COMMAND sequence_ids_reuse_contract)

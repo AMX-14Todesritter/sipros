@@ -144,11 +144,25 @@ Both modes retain fixed host arrays for the dataset; they are reset before scan
 preprocessing and at the end of the search scope. Candidate/top metadata remains
 batch-local. The sphere geometry, tracing policy and scoring formula are unchanged.
 
-`BatchSequenceIds` in `include/sequence_ids.h` owns its key text and hash nodes in
-one batch arena. It preserves first-seen IDs and exact string comparison, including
-when a top-candidate string is replaced during result restoration. It does not
-borrow mutable strings or preserve sequence IDs across batches. This reduces
-individual allocations/deallocations without adding a custom hash-table algorithm.
+`BatchSequenceIds` in `include/sequence_ids.h` uses contiguous ID slots,
+first-seen entries and owned key bytes. Linear probing with at most 50% occupancy
+replaces per-key hash nodes; stored hashes avoid rehashing strings during growth.
+Offsets keep keys valid when the byte buffer grows. Exact length/byte comparison
+preserves duplicate handling, including when result restoration replaces a
+source top-candidate string. IDs restart each batch, while `reset()` keeps slot,
+entry and byte capacity. Unique keys are still copied once, and growing the byte
+buffer may copy existing bytes. Stable IDs and GPU Top reuse remain follow-up work.
+
+A dataset-scoped host workspace reuses scoring input, initial/final Top, event and
+count arrays, plus peptide preprocessing text/rule/length/error scratch. Peptide
+pointers are borrowed from the caller through synchronous restoration instead of
+copying the pointer array; preprocessing writes offsets directly into the prepared
+batch. Dataset preprocessing/reset and search-scope exit release the workspace.
+This retains host memory at the largest capacity reached during the dataset and
+can increase peak RSS when later stages allocate; it is not a memory-reduction
+claim. Device buffers and peptide objects still follow their prior lifetimes.
+The workspace is for serial batches; a future pipeline needs separate workspaces
+for concurrently active batches.
 
 Rebuild `build/mvh_rt/gpu_integration` before running the normal benchmark scripts.
 Old `packing_optimized` and `profile_enabled` binaries may still contain profiling;

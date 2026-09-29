@@ -1,8 +1,56 @@
-# Optional CPU stage ranges for Nsight Systems
+# Detailed RT / CUDA function timing with Nsight Systems
 
 `MVH_ENABLE_PROFILING` defaults to `OFF`. When enabled, host code emits NVTX3 ranges. It does not change matching, MVH arithmetic, candidate ordering, ray generation, geometry, or synchronization. Device kernels and OptiX PTX receive no NVTX instrumentation.
 
 The interface is isolated in `include/profiling.h`. Disabled macros expand to `((void)0)`: no range objects, label evaluation, NVTX headers, or NVTX linkage are required. Existing CUB/OptiX library NVTX ranges can still appear in OFF captures; the switch controls only the application ranges added here. Enabled builds use the CUDA toolkit's header-only NVTX3 and its platform loader (`libdl` on Linux).
+
+## 细粒度函数耗时
+
+启用 `-DMVH_ENABLE_PROFILING=ON` 后，RT 后端及 CUDA 共用路径会输出嵌套 NVTX 标记。
+重新编译后可直接运行：
+
+```bash
+# 小数据验证；每次运行自动创建新的输出目录。
+bash MVH_RT/gpu_bridge/run_profile.sh --dataset smoke --tools nsys --batch 50 --range-trace
+
+# 实际数据统计；省略 --range-trace 可以减少导出文件的体积。
+bash MVH_RT/gpu_bridge/run_profile.sh --dataset marine --tools nsys --batch 6000000
+```
+
+每次 NSYS 运行自动导出：
+
+| 文件 | 含义 |
+|---|---|
+| `timings_nvtx_sum.csv` | 函数/阶段的调用次数、总耗时、平均值、中位数、最小值、最大值、标准差 |
+| `timings_cuda_gpu_kern_sum.csv` | CUDA / OptiX kernel 的 GPU 执行耗时统计 |
+| `timings_cuda_api_sum.csv` | CUDA API 的主机端耗时统计 |
+| `timings_cuda_gpu_mem_time_sum.csv` | GPU 内存传输/填充耗时统计 |
+| `timings_nvtx_pushpop_trace.csv` | 仅 `--range-trace`：每次调用的时间、父调用、线程、嵌套层级和自身耗时 |
+
+时间列默认单位为 ns。逐调用表的 `Duration` 包含子调用，`DurNonChild` 扣除了
+已插桩的子调用；未插桩函数的耗时仍计入其父调用的自身耗时。
+父子时间不能相加，NVTX 汇总中的百分比也不是整个程序运行时间的占比。
+模板 Buffer 的统计合并所有元素类型；upload 构造函数的标记不包含先执行的委托分配构造函数。
+
+新增覆盖范围：
+
+- `mvh/function/MvhScanVector::*`：读谱、预处理入口及搜索前后处理。
+- `mvh/function/*`：设备初始化、配置提取、谱图恢复、exclusive prefix sum、谱图设备缓存上传/释放及评分入口。
+- `mvh/preprocess/scans/*`、`mvh/preprocess/peptides/*`：主机打包、预处理 kernel 与已有等待、结果下载/恢复/校验。
+- `mvh/assignment/*`：候选关联的主机打包、质量窗口 kernel 提交、候选生成和稳定排序、校验。
+- `mvh/memory/Buffer/*`：CUDA 共用 buffer 分配、上传、下载和释放。
+- `mvh/rt/bridge/*`、`mvh/rt/sphere/*`、`mvh/rt/triangle/*`：后端派发、准备/复用、配置检查、几何输入准备及 launch。
+- `mvh/rt/SceneResources::*`、`mvh/rt/accel/*`：布局校验、加速结构内存计算、构建及已有等待、SBT 初始化。
+- `mvh/rt/optix/*`：OptiX 初始化、PTX 读取、module 创建、program group 创建、pipeline 链接、stack size 计算及资源销毁。
+- `mvh/rt/geometry/*`、`mvh/rt/DeviceBuffer/*`：几何生成的主机提交函数，以及 RT buffer 分配/传输/释放。
+- `mvh/rt/launch/*`：launch 参数上传、`optixLaunch` 提交；`mvh/gpu/scoring_completion_wait` 单独标记已有的评分完成等待。
+- `mvh/gpu/synced`、`mvh/diagnostic/rt_audit`：已有 device synchronize 和 RT audit 成本。
+
+这是**主机函数/阶段耗时**，异步提交函数返回不代表 GPU 已完成。
+`*_submit` 和几何生成 wrapper 的时长不能当作 GPU kernel 时长；后者应查看 kernel CSV 或 GPU 时间线。
+未向 device 内联函数、逐离子匹配逻辑或原始 CPU 源码副本中插入计时，也没有新增 GPU 同步。
+肽生成继续按批次统计，避免产生数百万逐肽事件；GPU 函数以实际 kernel 为统计单位。
+细粒度事件会增加采集开销，正常性能基线仍应使用 OFF 构建。
 
 ## Separate builds
 
@@ -118,10 +166,10 @@ The current container can collect NVTX and CUDA timelines with CPU sampling disa
 
 Ranges measure host elapsed time, including waits, allocation and synchronization already present in the program. They do not measure pure CPU execution time. Parent ranges include children: do not add parent and child totals. The default `nvtx_sum` percentage uses overlapping range totals, so it is not a percentage of end-to-end wall time. Compare GPU kernel durations on the GPU timeline separately.
 
-Generation uses one range per batch-sized chunk, paused while processing that batch. It does not emit events for individual peptides or ions. An empty terminal chunk can appear for an exact batch-size multiple; count `mvh/batch/process` for processed batches. Cleanup ranges are declared before the objects they cover and activated at function exit, so their destructors close the ranges after those objects are destroyed.
+Generation uses one range per batch-sized chunk, paused while processing that batch. It does not emit events for individual peptides or ions; spectrum storage and RT build-input helpers do emit per-scan events. An empty terminal chunk can appear for an exact batch-size multiple; count `mvh/batch/process` for processed batches. Cleanup ranges are declared before the objects they cover and activated at function exit, so their destructors close the ranges after those objects are destroyed.
 
 ## Disable or remove
 
-For continued optimization, simply use/rebuild the OFF configuration; the markers can remain in source with no NVTX calls. To remove them completely, remove the `MVH_PROFILE_*` statements and `profiling.h` includes in `app/runner.cpp`, `src/database_search.cpp`, and `cuda/engine.cu`, delete `include/profiling.h`, and remove the `mvh_profiling` interface target/option and its linkage in CMake. No search logic depends on the profiling wrapper.
+For continued optimization, simply use/rebuild the OFF configuration; the markers can remain in source with no NVTX calls. The shared `mvh_profiling` interface propagates the option and NVTX dependency to the RT support library and bridge as well as the CUDA engine. Standalone OptiX tutorial builds keep these macros disabled. No search logic depends on the profiling wrapper.
 
 Keep instrumentation changes separate from algorithm optimizations in version control. This change does not automatically commit the pre-existing workspace changes. Validate enabled/disabled PSM equality on the same inputs; use non-profiled runs for timing comparisons because capture adds overhead.

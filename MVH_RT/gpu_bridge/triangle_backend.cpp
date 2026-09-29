@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "backends.h"
 #include "geometry.h"
 #include "scene_resources.h"
@@ -16,6 +17,7 @@ struct TriangleState {
 std::unique_ptr<TriangleState> state;
 
 OptixBuildInput triangleInput(CUdeviceptr* address, unsigned count, unsigned* flags) {
+    MVH_PROFILE_SCOPE("mvh/rt/triangle/triangleInput");
     OptixBuildInput input{};
     input.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
     input.triangleArray.vertexBuffers = address;
@@ -31,6 +33,7 @@ OptixBuildInput triangleInput(CUdeviceptr* address, unsigned count, unsigned* fl
 void prepareInstances(TriangleState& next, const std::vector<mvh_cuda::Scan>& scans,
                       const mvh_cuda::Scan* deviceScans, const double* peaks, size_t peakCount,
                       const OptixAccelBuildOptions& options, unsigned& flags) {
+    MVH_PROFILE_SCOPE("mvh/rt/triangle/prepareInstances");
     unsigned maxId = 0;
     checkOptix(optixDeviceContextGetProperty(next.scene.objects.context,
         OPTIX_DEVICE_PROPERTY_LIMIT_MAX_INSTANCE_ID, &maxId, sizeof(maxId)));
@@ -56,10 +59,14 @@ void prepareInstances(TriangleState& next, const std::vector<mvh_cuda::Scan>& sc
 }
 }
 
-void reset() { state.reset(); }
+void reset() {
+    MVH_PROFILE_SCOPE("mvh/rt/triangle/reset");
+    state.reset();
+}
 
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* deviceScans,
              const double* peaks, size_t peakCount, bool instanced) {
+    MVH_PROFILE_SCOPE("mvh/rt/triangle/prepare");
     if (state) {
         state->scene.requireSameLayout(scans);
         if (state->instanced != instanced)
@@ -74,6 +81,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
     createPipeline(next->scene.objects, MVH_GPU_RT_PTX_PATH, instanced);
     const double pipelineSeconds = setupSeconds(start);
 
+    MVH_PROFILE_BEGIN(geometryRange, "mvh/rt/triangle/geometry_and_wait");
     const auto geometryStart = SetupClock::now();
     OptixAccelBuildOptions options{};
     options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -86,8 +94,10 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
         generateVertices(peaks, next->vertices->data, peakCount);
     }
     checkCuda(cudaDeviceSynchronize());
+    MVH_PROFILE_END(geometryRange);
     const double geometrySeconds = setupSeconds(geometryStart);
 
+    MVH_PROFILE_BEGIN(inputRange, "mvh/rt/triangle/build_inputs");
     const auto sizingStart = SetupClock::now();
     std::vector<OptixBuildInput> inputs(scans.size());
     std::vector<CUdeviceptr> addresses(scans.size());
@@ -103,6 +113,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
             inputs[i] = triangleInput(&addresses[i], scan.peaks * 3, &flags);
         }
     }
+    MVH_PROFILE_END(inputRange);
     const double inputSeconds = setupSeconds(sizingStart);
     const auto stats = next->scene.build(inputs, options);
     next->scene.initializeSbt();
@@ -120,6 +131,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
 }
 
 void launch(Params params) {
+    MVH_PROFILE_SCOPE("mvh/rt/triangle/launch");
     if (!state) throw std::runtime_error("Triangle RT resources not prepared");
     params.instanced = state->instanced;
     state->scene.launch(params);

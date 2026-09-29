@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "geometry.h"
 
 namespace mvh_rt_gpu {
@@ -27,14 +28,17 @@ __global__ void instancesKernel(const mvh_cuda::Scan *scans,const double *peaks,
     }
 }
 void generateVertices(const double *peaks,float3 *vertices,size_t count) {
+    MVH_PROFILE_SCOPE("mvh/rt/geometry/generateVertices");
     if(count)verticesKernel<<<(count+255)/256,256>>>(peaks,vertices,count);
     mvh_cuda::check(cudaGetLastError());
 }
 void generateBaseTriangle(float3 *vertices) {
+    MVH_PROFILE_SCOPE("mvh/rt/geometry/generateBaseTriangle");
     baseKernel<<<1,1>>>(vertices);mvh_cuda::check(cudaGetLastError());
 }
 void generateInstances(const mvh_cuda::Scan *scans,int count,const double *peaks,
                        OptixInstance *instances,OptixTraversableHandle base) {
+    MVH_PROFILE_SCOPE("mvh/rt/geometry/generateInstances");
     if(count)instancesKernel<<<count,256>>>(scans,peaks,instances,base);
     mvh_cuda::check(cudaGetLastError());
 }

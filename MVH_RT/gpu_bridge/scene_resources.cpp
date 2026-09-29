@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "scene_resources.h"
 #include <optix_stubs.h>
 #include <algorithm>
@@ -11,6 +12,7 @@ size_t alignedAccelerationSize(size_t bytes) {
 }
 
 void SceneResources::requireSameLayout(const std::vector<mvh_cuda::Scan>& scans) const {
+    MVH_PROFILE_SCOPE("mvh/rt/SceneResources::requireSameLayout");
     if (layout.size() != scans.size())
         throw std::runtime_error("RT layout changed without reset");
     for (size_t i = 0; i < scans.size(); ++i) {
@@ -22,12 +24,14 @@ void SceneResources::requireSameLayout(const std::vector<mvh_cuda::Scan>& scans)
 
 AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inputs,
                                         const OptixAccelBuildOptions& options) {
+    MVH_PROFILE_SCOPE("mvh/rt/SceneResources::build");
     if (inputs.size() != layout.size())
         throw std::runtime_error("RT build input count differs from scan layout");
     AccelerationStats stats;
     std::vector<OptixAccelBufferSizes> sizes(layout.size());
     std::vector<size_t> offsets(layout.size());
     std::vector<OptixTraversableHandle> scanHandles(layout.size());
+    MVH_PROFILE_BEGIN(sizingRange, "mvh/rt/accel/memory_usage");
     const auto sizingStart = SetupClock::now();
     for (size_t i = 0; i < layout.size(); ++i) {
         if (layout[i].skip || !layout[i].peaks) continue;
@@ -37,8 +41,10 @@ AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inpu
         stats.outputBytes += alignedAccelerationSize(sizes[i].outputSizeInBytes);
         stats.scratchBytes = std::max(stats.scratchBytes, sizes[i].tempSizeInBytes);
     }
+    MVH_PROFILE_END(sizingRange);
     stats.sizingSeconds = setupSeconds(sizingStart);
 
+    MVH_PROFILE_BEGIN(buildRange, "mvh/rt/accel/build_and_wait");
     const auto buildStart = SetupClock::now();
     acceleration = std::make_unique<DeviceBuffer<unsigned char>>(stats.outputBytes);
     DeviceBuffer<unsigned char> scratch(stats.scratchBytes);
@@ -50,12 +56,14 @@ AccelerationStats SceneResources::build(const std::vector<OptixBuildInput>& inpu
             sizes[i].outputSizeInBytes, &scanHandles[i], nullptr, 0));
     }
     checkCuda(cudaDeviceSynchronize());
+    MVH_PROFILE_END(buildRange);
     stats.buildSeconds = setupSeconds(buildStart);
     handles = std::make_unique<DeviceBuffer<OptixTraversableHandle>>(scanHandles);
     return stats;
 }
 
 void SceneResources::initializeSbt() {
+    MVH_PROFILE_SCOPE("mvh/rt/SceneResources::initializeSbt");
     SbtRecord<EmptyData> raygenRecord{}, missRecord{}, hitRecord{};
     checkOptix(optixSbtRecordPackHeader(objects.raygen, &raygenRecord));
     checkOptix(optixSbtRecordPackHeader(objects.miss, &missRecord));
@@ -73,8 +81,12 @@ void SceneResources::initializeSbt() {
 }
 
 void SceneResources::launch(Params params) {
+    MVH_PROFILE_SCOPE("mvh/rt/SceneResources::launch");
     params.handles = handles->data;
+    MVH_PROFILE_BEGIN(paramsRange, "mvh/rt/launch/upload_params");
     checkCuda(cudaMemcpy(parameters.data, &params, sizeof(params), cudaMemcpyHostToDevice));
+    MVH_PROFILE_END(paramsRange);
+    MVH_PROFILE_SCOPE("mvh/rt/launch/optixLaunch_submit");
     checkOptix(optixLaunch(objects.pipeline, nullptr, parameters.address(), sizeof(params),
                           &sbt, params.size, 1, 1));
 }

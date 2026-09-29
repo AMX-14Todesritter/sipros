@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "bridge.h"
 #include "backends.h"
 #include <optional>
@@ -8,6 +9,7 @@ std::optional<GeometryKind> activeGeometry;
 }
 
 void reset() {
+    MVH_PROFILE_SCOPE("mvh/rt/bridge/reset");
     sphere_backend::reset();
     triangle_backend::reset();
     activeGeometry.reset();
@@ -17,6 +19,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans,
              const mvh_cuda::Scan* deviceScans, const double* devicePeaks,
              const int* deviceClasses, size_t peakCount, GeometryKind geometry,
              const mvh_cuda::Config& config) {
+    MVH_PROFILE_SCOPE("mvh/rt/bridge/prepare");
     if (activeGeometry && *activeGeometry != geometry)
         throw std::runtime_error("RT backend changed without reset");
 
@@ -37,6 +40,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans,
 }
 
 void launch(Params params) {
+    MVH_PROFILE_SCOPE("mvh/rt/bridge/launch");
     if (!params.size) return;
     if (!activeGeometry) throw std::runtime_error("RT resources not prepared");
     if (*activeGeometry == GeometryKind::Spheres)

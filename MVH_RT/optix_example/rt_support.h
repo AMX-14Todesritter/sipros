@@ -1,4 +1,5 @@
 #pragma once
+#include "../../mvh_cuda/include/profiling.h"
 
 #include "scene.h"
 #include <filesystem>
@@ -14,16 +15,19 @@ public:
     T *data = nullptr;
     size_t count = 0;
     explicit DeviceBuffer(size_t size) : count(size) {
+        MVH_PROFILE_SCOPE("mvh/rt/DeviceBuffer/allocate");
         if (count) checkCuda(cudaMalloc(reinterpret_cast<void **>(&data), count * sizeof(T)));
     }
     explicit DeviceBuffer(const std::vector<T> &values) : DeviceBuffer(values.size()) {
+        MVH_PROFILE_SCOPE("mvh/rt/DeviceBuffer/upload");
         if (count) checkCuda(cudaMemcpy(data, values.data(), count * sizeof(T), cudaMemcpyHostToDevice));
     }
-    ~DeviceBuffer() { if (data) cudaFree(data); }
+    ~DeviceBuffer() { MVH_PROFILE_SCOPE("mvh/rt/DeviceBuffer/free"); if (data) cudaFree(data); }
     DeviceBuffer(const DeviceBuffer &) = delete;
     DeviceBuffer &operator=(const DeviceBuffer &) = delete;
     CUdeviceptr address() const { return reinterpret_cast<CUdeviceptr>(data); }
     std::vector<T> download() const {
+        MVH_PROFILE_SCOPE("mvh/rt/DeviceBuffer/download");
         std::vector<T> values(count);
         if (count) checkCuda(cudaMemcpy(values.data(), data, count * sizeof(T), cudaMemcpyDeviceToHost));
         return values;

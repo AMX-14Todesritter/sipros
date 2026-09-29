@@ -1,3 +1,4 @@
+#include "../../mvh_cuda/include/profiling.h"
 #include "rt_support.h"
 
 // Define the OptiX function table in exactly one translation unit.
@@ -25,6 +26,7 @@ void logCallback(unsigned int level, const char *tag, const char *message, void 
 }
 
 void initializeOptix(OptixObjects &objects) {
+    MVH_PROFILE_SCOPE("mvh/rt/optix/initializeOptix");
     checkCuda(cudaSetDevice(0));
     checkCuda(cudaFree(nullptr)); // Initialize the CUDA primary context.
     const OptixResult initialized = optixInit();
@@ -106,6 +108,7 @@ std::vector<Ray> generateRays(const double* mzValues, size_t count,double tolera
 
 
 OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixProgramGroupDesc description) {
+    MVH_PROFILE_SCOPE("mvh/rt/optix/createProgramGroup");
     OptixProgramGroupOptions options{};
     OptixProgramGroup group = nullptr;
     char log[4096]{};
@@ -117,10 +120,13 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixProgramGro
 }
 
 void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced, PrimitiveKind primitive) {
+    MVH_PROFILE_SCOPE("mvh/rt/optix/createPipeline");
     const bool spheres = primitive == PrimitiveKind::Sphere;
+    MVH_PROFILE_BEGIN(ptxRange, "mvh/rt/optix/read_ptx");
     std::ifstream stream(ptxPath, std::ios::binary);
     if (!stream) throw std::runtime_error("Cannot open PTX: " + ptxPath.string());
     const std::string ptx((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    MVH_PROFILE_END(ptxRange);
     OptixModuleCompileOptions moduleOptions{};
     moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
@@ -134,11 +140,13 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
                                                    : OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
     char log[4096]{};
     size_t logSize = sizeof(log);
+    MVH_PROFILE_BEGIN(moduleRange, "mvh/rt/optix/module_create");
     auto result = optixModuleCreate(objects.context, &moduleOptions, &compileOptions,
                                     ptx.data(), ptx.size(), log, &logSize, &objects.module);
     if (result != OPTIX_SUCCESS) std::cerr << log << '\n';
     checkOptix(result);
 
+    MVH_PROFILE_END(moduleRange);
     OptixProgramGroupDesc description{};
     description.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
     description.raygen.module = objects.module;
@@ -170,11 +178,14 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
     OptixPipelineLinkOptions linkOptions{};
     linkOptions.maxTraceDepth = 1; // No recursive reflection/refraction rays.
     logSize = sizeof(log);
+    MVH_PROFILE_BEGIN(linkRange, "mvh/rt/optix/pipeline_link");
     result = optixPipelineCreate(objects.context, &compileOptions, &linkOptions,
                                  groups, 3, log, &logSize, &objects.pipeline);
     if (result != OPTIX_SUCCESS) std::cerr << log << '\n';
     checkOptix(result);
 
+    MVH_PROFILE_END(linkRange);
+    MVH_PROFILE_SCOPE("mvh/rt/optix/stack_sizes");
     // Derive stack sizes from the compiled programs instead of guessing sizes.
     OptixStackSizes sizes{};
     for (const auto group : groups)
@@ -324,6 +335,7 @@ std::vector<RayResult> traceRays(
 
 OptixObjects::~OptixObjects()
 {
+    MVH_PROFILE_SCOPE("mvh/rt/optix/OptixObjects::~OptixObjects");
     if (pipeline) optixPipelineDestroy(pipeline);
     if (hit) optixProgramGroupDestroy(hit);
     if (miss) optixProgramGroupDestroy(miss);

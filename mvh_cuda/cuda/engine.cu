@@ -70,6 +70,7 @@ bool needsHostBuckets() {
 
 void storeProcessedSpectrum(MS2Scan &scan, std::map<double, char> &peaks,
                             UnindexedSpectrum *unindexed) {
+    MVH_PROFILE_SCOPE("mvh/function/storeProcessedSpectrum");
     delete scan.peakData;
     scan.peakData = nullptr;
     // Preserve CUDA's original release/allocation order as well as its data.
@@ -99,6 +100,7 @@ const UnindexedSpectrum &unindexedSpectrum(size_t index, const MS2Scan *scan) {
 }
 
 void initialize(){
+    MVH_PROFILE_SCOPE("mvh/function/initialize");
     if(deviceReady)return;int count=0;check(cudaGetDeviceCount(&count));require(count>0,"No CUDA GPU available; no silent CPU fallback");
     cudaDeviceProp prop{};check(cudaGetDeviceProperties(&prop,0));check(cudaSetDevice(0));
     std::cout<<"[CUDA device] "<<prop.name<<"; OpenMP compute loops disabled\n";
@@ -112,6 +114,7 @@ void initialize(){
     deviceReady=true;
 }
 Config configuration(){
+    MVH_PROFILE_SCOPE("mvh/function/configuration");
     Config c{};c.classes=ProNovoConfig::NumIntensityClasses;c.minClassCount=ProNovoConfig::minIntensityClassCount;
     c.maxPeaks=ProNovoConfig::MaxPeakCount;c.minMatched=ProNovoConfig::MinMatchedFragments;
     c.minLength=ProNovoConfig::getMinPeptideLength();c.smart=MVH::bUseSmartPlusThreeModel;
@@ -141,6 +144,7 @@ void startScoreImpact(const std::string &outputDirectory) {
 }
 
 MatchBackendScope::~MatchBackendScope() {
+    MVH_PROFILE_SCOPE("mvh/function/MatchBackendScope::~MatchBackendScope");
     scoreImpactWriter.reset();
     resetScoringSpectra();
     unindexedSpectra.clear();
@@ -165,25 +169,33 @@ void setSpectrumDeviceCache(bool enabled) { keepSpectraOnDevice = enabled; }
 bool spectrumDeviceCache() { return keepSpectraOnDevice; }
 
 void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
+    MVH_PROFILE_SCOPE("mvh/function/preProcessAllMs2Mvh");
     resetScoringSpectra();
 #ifdef MVH_CUDA_ENABLE_RT
     mvh_rt_gpu::reset();
 #endif
     initialize();double start=now();Config cfg=configuration();int n=scans.size();require(n>0,"empty scan collection");
+    MVH_PROFILE_BEGIN(rawRange, "mvh/preprocess/scans/pack_host");
     std::vector<RawScan> raw;std::vector<double> mz,intensity;std::vector<int> charges;
     for(auto *s:scans){require(s->vdMZ.size()==s->vdIntensity.size()&&s->vdMZ.size()==s->viCharge.size(),"raw peak array lengths");
         require(s->vdMZ.size()<=std::numeric_limits<int>::max(),"scan too large");
         raw.push_back({mz.size(),int(s->vdMZ.size()),s->iParentChargeState,s->dParentNeutralMass,s->dParentMZ});
         append(mz,s->vdMZ);append(intensity,s->vdIntensity);append(charges,s->viCharge);
     }
+    MVH_PROFILE_END(rawRange);
     std::vector<PrepResult> result;std::vector<double> kept;std::vector<int> classes;
     {
         Buffer<RawScan> dRaw(raw);Buffer<double>dMz(mz),dIntensity(intensity);Buffer<int>dCharge(charges),indices(mz.size());
         Buffer<PrepResult>dResult(n);Buffer<double>dKept(size_t(n)*cfg.maxPeaks);Buffer<int>dClasses(size_t(n)*cfg.maxPeaks);
+        MVH_PROFILE_BEGIN(prepRange, "mvh/preprocess/scans/preprocess_and_wait");
         preprocessMvh<<<(n+127)/128,128>>>(dRaw.p,n,dMz.p,dIntensity.p,dCharge.p,indices.p,dResult.p,dKept.p,dClasses.p,cfg);synced();
+        MVH_PROFILE_END(prepRange);
+        MVH_PROFILE_BEGIN(sumRange, "mvh/preprocess/scans/sum_intensity_and_wait");
         sumIntensity<<<(n+127)/128,128>>>(dRaw.p,n,dIntensity.p,dResult.p);synced();
+        MVH_PROFILE_END(sumRange);
         dMz.read(mz);dIntensity.read(intensity);dCharge.read(charges);dResult.read(result);dKept.read(kept);dClasses.read(classes);
     }
+    MVH_PROFILE_BEGIN(restoreRange, "mvh/preprocess/scans/restore_and_verify");
     const bool buildHostBuckets = needsHostBuckets();
     unindexedSpectra.clear();
     if (!buildHostBuckets) unindexedSpectra.resize(scans.size());
@@ -213,7 +225,8 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
         if(!r.skip){s->totalPeakBins=r.totalBins;s->intenClassCounts->assign(r.counts,r.counts+cfg.classes+1);maxBins=std::max(maxBins,r.totalBins);}
         s->dSumIntensity=r.sum;s->dMaxIntensity=r.max;
     }
-    MVH::initialLnTable(maxBins);
+    MVH_PROFILE_END(restoreRange);
+    { MVH_PROFILE_SCOPE("mvh/preprocess/scans/initialLnTable"); MVH::initialLnTable(maxBins); }
     std::cout<<"[CUDA preprocessing] scans="<<n<<" seconds="<<now()-start<<" verified="<<verification
              <<" host_bucket_entries="<<hostBucketEntries<<'\n';
 }
@@ -221,6 +234,7 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
 void preprocessingMVH(std::vector<Peptide *> &peptides){
     MVH_PROFILE_SCOPE("mvh/batch/preprocess_peptides");
     initialize();if(peptides.empty())return;double start=now();
+    MVH_PROFILE_BEGIN(textRange, "mvh/preprocess/peptides/pack_host");
     std::vector<Rule> rules;for(const auto &pair:ProNovoConfig::getNeutralLossList()){
         require(!pair.first.empty()&&pair.first.size()<MaxText&&pair.second.size()<MaxText,"neutral loss rule too long");
         Rule r{};r.fromLen=pair.first.size();r.toLen=pair.second.size();std::memcpy(r.from,pair.first.data(),r.fromLen);std::memcpy(r.to,pair.second.data(),r.toLen);rules.push_back(r);
@@ -231,14 +245,18 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
         require(cap<=MaxText,"peptide text exceeds CUDA capacity 512");offsets.push_back(texts.size());capacities.push_back(cap);
         texts.resize(texts.size()+cap,0);std::memcpy(texts.data()+offsets.back(),p->sPeptide.data(),p->sPeptide.size());
     }
+    MVH_PROFILE_END(textRange);
     int n=peptides.size();
     auto prepared=std::make_unique<PreparedPeptides>();
     prepared->texts=std::make_unique<Buffer<char>>(texts);
     prepared->offsets=offsets;
     Buffer<uint64_t>dOffsets(offsets);Buffer<int>dCap(capacities),dLengths(n),dErrors(n);Buffer<Rule>dRules(rules);
+    MVH_PROFILE_BEGIN(peptideKernelRange, "mvh/preprocess/peptides/kernel_and_wait");
     preprocessingMVH<<<(n+127)/128,128>>>(prepared->texts->p,dOffsets.p,dCap.p,n,dRules.p,rules.size(),dLengths.p,dErrors.p);synced();
+    MVH_PROFILE_END(peptideKernelRange);
     // Only verification needs neutral-loss strings on the host. Normal search
     // keeps the transformed text resident through theoretical-ion generation.
+    MVH_PROFILE_BEGIN(peptideRestoreRange, "mvh/preprocess/peptides/download_and_verify");
     if(verification) prepared->texts->read(texts);
     dLengths.read(lengths);dErrors.read(errors);
     for(int i=0;i<n;++i){require(errors[i]==0,"neutral loss failed or self-repeating rule");require(lengths[i]<=MaxLength,"peptide exceeds 128 residues");
@@ -250,6 +268,7 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
         }
         peptides[i]->iPeptideLength=lengths[i];
     }
+    MVH_PROFILE_END(peptideRestoreRange);
     preparedPeptides=std::move(prepared);
     std::cout<<"[CUDA peptide preprocessing] peptides="<<n<<" seconds="<<now()-start<<" verified="<<verification<<'\n';
 }
@@ -266,6 +285,7 @@ std::unique_ptr<AssignedBatch> assignedBatch;
 // CUB owns no persistent storage here. Scratch memory is released at the end
 // of each operation, so peak memory is bounded by the current peptide batch.
 uint64_t exclusiveOffsets(Buffer<uint64_t> &counts, Buffer<uint64_t> &offsets) {
+    MVH_PROFILE_SCOPE("mvh/function/exclusiveOffsets");
     size_t bytes = 0;
     check(cub::DeviceScan::ExclusiveSum(nullptr, bytes, counts.p, offsets.p, counts.n));
     Buffer<unsigned char> scratch(bytes);
@@ -282,6 +302,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
     MVH_PROFILE_SCOPE("mvh/batch/assign_scans");
     initialize();
     const double start = now();
+    MVH_PROFILE_BEGIN(assignHostRange, "mvh/assignment/pack_host");
     auto batch = std::make_unique<AssignedBatch>();
     batch->peptideCount = peptides.size();
     std::unordered_map<const MS2Scan *, int> scanIds;
@@ -300,6 +321,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
     ProNovoConfig::getPeptideMassWindows(0, originalWindows);
     std::vector<MassWindow> windows;
     for (const auto &window : originalWindows) windows.push_back({window.first, window.second});
+    MVH_PROFILE_END(assignHostRange);
     const int size = peptides.size(), windowCount = windows.size();
     Buffer<double> deviceMasses(masses);
     Buffer<Precursor> devicePrecursors(batch->precursors);
@@ -308,10 +330,12 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
     Buffer<int> rangeCounts(size);
     Buffer<uint64_t> counts(size + 1), offsets(size + 1);
     check(cudaMemset(counts.p, 0, counts.n * sizeof(uint64_t)));
+    MVH_PROFILE_BEGIN(rangeKernelRange, "mvh/assignment/ranges_submit");
     GetAllRangeFromMass<<<(size + 127) / 128, 128>>>(deviceMasses.p, size,
         devicePrecursors.p, batch->precursors.size(), deviceWindows.p, windowCount,
         ranges.p, rangeCounts.p, counts.p);
     check(cudaGetLastError());
+    MVH_PROFILE_END(rangeKernelRange);
     const uint64_t associations = exclusiveOffsets(counts, offsets);
     require(associations <= size_t(std::numeric_limits<int>::max()),
             "candidate batch exceeds CUB int indexing; lower the peptide batch size");
@@ -324,6 +348,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
         ProNovoConfig::dMaxPeptideMass = std::max(ProNovoConfig::dMaxPeptideMass, masses[i]);
     }
     if (associations) {
+        MVH_PROFILE_SCOPE("mvh/assignment/fill_and_sort");
         Buffer<Candidate> unsorted(associations);
         Buffer<int> keys(associations), sortedKeys(associations);
         assignPeptides2Scans<<<(size + 127) / 128, 128>>>(ranges.p, rangeCounts.p,
@@ -338,6 +363,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
             unsorted.p, batch->candidates->p, int(associations)));
     }
     if (verification) {
+        MVH_PROFILE_SCOPE("mvh/assignment/verify");
         std::vector<MassRange> actual;
         ranges.read(actual);
         for (int i = 0; i < size; ++i) {
@@ -385,12 +411,14 @@ struct ScoringSpectra {
     bool withBuckets = false;
 
     void releaseDevice() {
+        MVH_PROFILE_SCOPE("mvh/function/releaseDevice");
         deviceTable.reset();
         deviceBuckets.reset();
         deviceClasses.reset();
         devicePeaks.reset();
     }
     void uploadOnce() {
+        MVH_PROFILE_SCOPE("mvh/function/uploadOnce");
         if (deviceTable) return;
         devicePeaks = std::make_unique<Buffer<double>>(peaks);
         deviceClasses = std::make_unique<Buffer<int>>(classes);
@@ -415,7 +443,10 @@ private:
 };
 std::unique_ptr<ScoringSpectra> scoringSpectra;
 
-void resetScoringSpectra() { scoringSpectra.reset(); }
+void resetScoringSpectra() {
+    MVH_PROFILE_SCOPE("mvh/function/resetScoringSpectra");
+    scoringSpectra.reset();
+}
 
 ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const Config& config) {
     MVH_PROFILE_SCOPE("mvh/pack/prepare_or_reuse_spectra");
@@ -691,6 +722,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         p.chargeStride=output.chargeStride;
         mvh_rt_gpu::launch(p);
         if (auditResults) {
+            MVH_PROFILE_SCOPE("mvh/diagnostic/rt_audit");
             Buffer<unsigned long long> differences(4);
             check(cudaMemset(differences.p,0,4*sizeof(unsigned long long)));
             compareRtResults<<<(size+127)/128,128>>>(results.p,auditResults->p,size,differences.p);
@@ -703,7 +735,9 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     }
 #endif
     check(cudaEventRecord(kernelEnd.event));
+    MVH_PROFILE_BEGIN(scoreWaitRange, "mvh/gpu/scoring_completion_wait");
     check(cudaEventSynchronize(kernelEnd.event));
+    MVH_PROFILE_END(scoreWaitRange);
     float milliseconds=0;
     check(cudaEventElapsedTime(&milliseconds, kernelStart.event, kernelEnd.event));
     output.kernelSeconds = milliseconds / 1000.0;
@@ -821,6 +855,7 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
 } // namespace
 
 void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *> &peptides) {
+    MVH_PROFILE_SCOPE("mvh/function/scorePeptidesMVH");
     MVH_PROFILE_SCOPE("mvh/batch/score_and_restore");
     MVH_PROFILE_DEFER(batchCleanupRange, "mvh/host/release_packed_batch");
     initialize();

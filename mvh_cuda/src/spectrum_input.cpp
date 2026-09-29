@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "mvh_scan_vector.h"
 #include "engine.h"
 #include "SiprosReader.h"
@@ -23,6 +24,7 @@ void MvhScanVector::setOutputFile(const string &sFT2FilenameInput, const string 
 
 bool MvhScanVector::ReadFT2File()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::ReadFT2File");
 	bool bReVal, flag_1stScan = true; // flag_1stScan true indicates pMS2Scan is empty
 	string sline;
 	istringstream input;
@@ -174,6 +176,7 @@ bool MvhScanVector::ReadFT2File()
 
 bool MvhScanVector::ReadMzmlFile()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::ReadMzmlFile");
 	bool bReVal = false;
 	MS2Scan *pMS2Scan;
 	vector<Spectrum> *_vSpectra = new vector<Spectrum>();
@@ -238,6 +241,7 @@ bool MvhScanVector::ReadMzmlFile()
 
 bool MvhScanVector::loadFT2File()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::loadFT2File");
 	bool bReVal; // false when the file fails to be opened.
 	double parentNeutralMass;
 	bReVal = ReadFT2File();
@@ -307,6 +311,7 @@ bool MvhScanVector::loadFT2File()
 
 bool MvhScanVector::loadMassData()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::loadMassData");
 	CLOCKSTART;
 	// read all MS2 scans from the file and populate vpAllMS2Scans
 	// sort all MS2 scans in vpAllProteins by ascending order of their precursor masses
@@ -465,5 +470,6 @@ void MvhScanVector::saveMzmlScan(MS2Scan *pMS2Scan)
 
 void MvhScanVector::preProcessAllMs2Mvh()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::preProcessAllMs2Mvh");
     mvh_cuda::preProcessAllMs2Mvh(vpAllMS2Scans);
 }

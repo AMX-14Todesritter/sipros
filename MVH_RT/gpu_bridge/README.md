@@ -224,3 +224,12 @@ scoring launch with early termination. Use `--tools nsys`, `--tools ncu`,
 `--ncu-launch-skip`, `--ncu-launch-count`, or `--dry-run` as needed.
 See [profiling instructions](../../mvh_cuda/PROFILING.md) for parameters and
 limitations. This script uses the separate `profile_enabled` binary.
+
+### 细粒度函数耗时 CSV
+
+重编译 `profile_enabled` 后，运行
+`bash MVH_RT/gpu_bridge/run_profile.sh --dataset smoke --tools nsys --batch 50 --range-trace`。
+`timings_nvtx_sum.csv` 给出 RT 和共享 CUDA 主机函数/阶段的次数、总耗时及单次耗时分布；
+`timings_nvtx_pushpop_trace.csv` 包含逐调用父子关系和自身耗时。GPU kernel、CUDA API
+及内存操作各有独立 CSV。详细覆盖范围、构建命令和时间含义见
+[PROFILING.md](../../mvh_cuda/PROFILING.md#细粒度函数耗时)。

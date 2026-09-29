@@ -42,6 +42,8 @@ def arguments():
                         help='Selected tools; NSYS always runs before NCU')
     parser.add_argument('--spectrum-cache', choices=['host', 'device'],
                         help='Optimized binary only: keep packed spectra on host or also on GPU')
+    parser.add_argument('--range-trace', action='store_true',
+                        help='Also export individual NVTX calls, nesting and self time (may be large)')
     parser.add_argument('--ncu-set', choices=['basic', 'detailed', 'full'], default='basic')
     parser.add_argument('--ncu-launch-skip', type=nonnegative, default=0,
                         help='Skip this many matching scoring launches, not all GPU kernels')
@@ -88,6 +90,13 @@ def capture_commands(args, inputs, output):
         commands['nsys_summary'] = ['nsys', 'stats', '--report',
                                     'nvtx_sum,cuda_gpu_kern_sum,cuda_api_sum',
                                     str(output/'nsys_capture.nsys-rep')]
+    if 'nsys' in args.tools:
+        reports = 'nvtx_sum,cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum'
+        if args.range_trace:
+            reports += ',nvtx_pushpop_trace'
+        commands['nsys_csv'] = ['nsys', 'stats', '--report', reports,
+                                '--format', 'csv', '--output', str(output/'timings'),
+                                str(output/'nsys_capture.sqlite')]
     if 'ncu' in args.tools:
         kernel = 'ScoreSequenceVsSpectrum' if args.backend == 'cuda' else 'optixLaunch'
         commands['ncu'] = ['ncu', '--set', args.ncu_set, '--kernel-name', kernel,
@@ -207,6 +216,11 @@ def main():
             elif name == 'nsys_summary':
                 if 'mvh/search/database' not in (output/'nsys_summary.log').read_text():
                     raise RuntimeError('NSYS report has no application stage ranges; rebuild with profiling ON')
+            elif name == 'nsys_csv':
+                timing_csv = output/'timings_nvtx_sum.csv'
+                if not timing_csv.is_file() or 'mvh/search/database' not in timing_csv.read_text():
+                    raise RuntimeError('NSYS did not export application timing CSV')
+                manifest['timing_reports'] = [p.name for p in sorted(output.glob('timings_*.csv'))]
             elif name == 'ncu':
                 if not (output/'ncu_capture.ncu-rep').is_file():
                     raise RuntimeError('NCU captured no report; check kernel filter and launch skip')

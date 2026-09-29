@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "custom_geometry.h"
 
 namespace mvh_rt_gpu {
@@ -26,6 +27,7 @@ void generateSphereCenters(
     float3* centers,
     size_t count)
 {
+    MVH_PROFILE_SCOPE("mvh/rt/geometry/generateSphereCenters");
     if (count) {
         sphereCentersKernel<<<(count + 255) / 256, 256>>>(
             peaks, classes, centers, count);

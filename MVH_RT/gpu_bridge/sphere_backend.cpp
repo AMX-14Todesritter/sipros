@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "backends.h"
 #include "custom_geometry.h"
 #include "scene_resources.h"
@@ -18,6 +19,7 @@ struct SphereState {
 std::unique_ptr<SphereState> state;
 
 void validateConfiguration(const mvh_cuda::Config& config) {
+    MVH_PROFILE_SCOPE("mvh/rt/sphere/validateConfiguration");
     const float radius = static_cast<float>(config.fragmentTolerance);
     if (!std::isfinite(config.fragmentTolerance) || radius <= 0 || radius >= 1)
         throw std::runtime_error("Sphere RT requires a radius in (0, 1) for unit class spacing");
@@ -26,10 +28,14 @@ void validateConfiguration(const mvh_cuda::Config& config) {
 }
 }
 
-void reset() { state.reset(); }
+void reset() {
+    MVH_PROFILE_SCOPE("mvh/rt/sphere/reset");
+    state.reset();
+}
 
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
              const int* classes, size_t peakCount, const mvh_cuda::Config& config) {
+    MVH_PROFILE_SCOPE("mvh/rt/sphere/prepare");
     validateConfiguration(config);
     if (peakCount && (!peaks || !classes))
         throw std::runtime_error("Sphere RT requires peak masses and classes");
@@ -49,6 +55,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     createPipeline(next->scene.objects, MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
     const double pipelineSeconds = setupSeconds(start);
 
+    MVH_PROFILE_BEGIN(geometryRange, "mvh/rt/sphere/geometry_and_wait");
     const auto geometryStart = SetupClock::now();
     const float radius = static_cast<float>(config.fragmentTolerance);
     next->centers = std::make_unique<DeviceBuffer<float3>>(peakCount);
@@ -58,6 +65,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     next->rayOriginY = float(config.classes) + radius + 1.0f;
     next->rayTmax = next->rayOriginY + radius + 1.0f;
     checkCuda(cudaDeviceSynchronize());
+    MVH_PROFILE_END(geometryRange);
     const double geometrySeconds = setupSeconds(geometryStart);
 
     OptixAccelBuildOptions options{};
@@ -68,6 +76,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     std::vector<CUdeviceptr> centerAddresses(scans.size());
     // Build inputs reference these host addresses until scene.build completes.
     CUdeviceptr radiusAddress = next->radius->address();
+    MVH_PROFILE_BEGIN(inputRange, "mvh/rt/sphere/build_inputs");
     const auto sizingStart = SetupClock::now();
     for (size_t i = 0; i < scans.size(); ++i) {
         const auto& scan = scans[i];
@@ -84,6 +93,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
         input.flags = &flags;
         input.numSbtRecords = 1;
     }
+    MVH_PROFILE_END(inputRange);
     const double inputSeconds = setupSeconds(sizingStart);
     const auto stats = next->scene.build(inputs, options);
     next->scene.initializeSbt();
@@ -99,6 +109,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
 }
 
 void launch(Params params) {
+    MVH_PROFILE_SCOPE("mvh/rt/sphere/launch");
     if (!state) throw std::runtime_error("Sphere RT resources not prepared");
     if (params.cfg.fragmentTolerance != state->fragmentTolerance || params.cfg.classes != state->classCount)
         throw std::runtime_error("Sphere RT launch configuration differs from prepared geometry");

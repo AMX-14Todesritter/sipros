@@ -1,3 +1,4 @@
+#include "profiling.h"
 #include "mvh_scan_vector.h"
 
 MvhScanVector::MvhScanVector(const string &sFT2FilenameInput, const string &sOutputDirectory,
@@ -31,6 +32,7 @@ MvhScanVector::~MvhScanVector()
 
 void MvhScanVector::preMvh()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::preMvh");
 	num_max_threads = 1; // CUDA scoring owns its workspace; no OpenMP workers.
 	for (int i = 0; i < num_max_threads; ++i)
 	{
@@ -43,6 +45,7 @@ void MvhScanVector::preMvh()
 
 void MvhScanVector::postMvh()
 {
+    MVH_PROFILE_SCOPE("mvh/function/MvhScanVector::postMvh");
 	for (int i = 0; i < num_max_threads; ++i)
 	{
 		delete _ppdAAforward.at(i);

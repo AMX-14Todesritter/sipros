@@ -1,4 +1,5 @@
 #pragma once
+#include "../include/profiling.h"
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <stdexcept>
@@ -9,13 +10,13 @@ constexpr int MaxClasses=8, MaxLength=128, MaxText=512, TopN=50;
 inline void check(cudaError_t e) { if(e!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(e)); }
 template<class T> struct Buffer {
     T *p=nullptr; size_t n=0;
-    explicit Buffer(size_t count):n(count){if(n) check(cudaMalloc(&p,n*sizeof(T)));}
-    explicit Buffer(const std::vector<T>&v):Buffer(v.size()){if(n) check(cudaMemcpy(p,v.data(),n*sizeof(T),cudaMemcpyHostToDevice));}
+    explicit Buffer(size_t count):n(count){MVH_PROFILE_SCOPE("mvh/memory/Buffer/allocate");if(n) check(cudaMalloc(&p,n*sizeof(T)));}
+    explicit Buffer(const std::vector<T>&v):Buffer(v.size()){MVH_PROFILE_SCOPE("mvh/memory/Buffer/upload");if(n) check(cudaMemcpy(p,v.data(),n*sizeof(T),cudaMemcpyHostToDevice));}
     Buffer(const Buffer&)=delete; Buffer&operator=(const Buffer&)=delete;
-    ~Buffer(){if(p)cudaFree(p);}
-    void read(std::vector<T>&v){v.resize(n);if(n)check(cudaMemcpy(v.data(),p,n*sizeof(T),cudaMemcpyDeviceToHost));}
+    ~Buffer(){MVH_PROFILE_SCOPE("mvh/memory/Buffer/free");if(p)cudaFree(p);}
+    void read(std::vector<T>&v){MVH_PROFILE_SCOPE("mvh/memory/Buffer/download");v.resize(n);if(n)check(cudaMemcpy(v.data(),p,n*sizeof(T),cudaMemcpyDeviceToHost));}
 };
-inline void synced(){check(cudaGetLastError());check(cudaDeviceSynchronize());}
+inline void synced(){MVH_PROFILE_SCOPE("mvh/gpu/synced");check(cudaGetLastError());check(cudaDeviceSynchronize());}
 struct Config {
     int classes,minClassCount,maxPeaks,minMatched,minLength,smart,bIon,yIon;
     double tic,multiplier,fragmentTolerance,parentTolerance,mzLow,mzHigh,water,proton,yWater;

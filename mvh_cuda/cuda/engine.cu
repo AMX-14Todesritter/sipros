@@ -23,6 +23,7 @@
 namespace mvh_cuda {
 namespace {
 void resetScoringSpectra();
+void resetBatchWorkspace();
 bool verification=false;
 bool scoreImpactEnabled = false;
 std::unique_ptr<ScoreImpactWriter> scoreImpactWriter;
@@ -35,6 +36,12 @@ struct PreparedPeptides {
     std::vector<uint64_t> offsets;
 };
 std::unique_ptr<PreparedPeptides> preparedPeptides;
+struct PeptideHostScratch {
+    std::vector<Rule> rules;
+    std::vector<char> texts;
+    std::vector<int> capacities, lengths, errors;
+};
+std::unique_ptr<PeptideHostScratch> peptideHostScratch;
 
 // Pure RT needs sorted masses/classes, but neither PeakList nor its mass hub.
 // These compact arrays live for one dataset, in the same order as its scans.
@@ -235,11 +242,24 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
     MVH_PROFILE_SCOPE("mvh/batch/preprocess_peptides");
     initialize();if(peptides.empty())return;double start=now();
     MVH_PROFILE_BEGIN(textRange, "mvh/preprocess/peptides/pack_host");
-    std::vector<Rule> rules;for(const auto &pair:ProNovoConfig::getNeutralLossList()){
+    if (!peptideHostScratch) peptideHostScratch = std::make_unique<PeptideHostScratch>();
+    auto& scratch = *peptideHostScratch;
+    auto& rules = scratch.rules;
+    rules.clear();
+    for(const auto &pair:ProNovoConfig::getNeutralLossList()){
         require(!pair.first.empty()&&pair.first.size()<MaxText&&pair.second.size()<MaxText,"neutral loss rule too long");
         Rule r{};r.fromLen=pair.first.size();r.toLen=pair.second.size();std::memcpy(r.from,pair.first.data(),r.fromLen);std::memcpy(r.to,pair.second.data(),r.toLen);rules.push_back(r);
     }
-    std::vector<char> texts;std::vector<uint64_t> offsets;std::vector<int> capacities,lengths,errors;
+    auto& texts = scratch.texts;
+    auto& capacities = scratch.capacities;
+    auto& lengths = scratch.lengths;
+    auto& errors = scratch.errors;
+    texts.clear();
+    capacities.clear();
+    capacities.reserve(peptides.size());
+    auto prepared=std::make_unique<PreparedPeptides>();
+    auto& offsets = prepared->offsets;
+    offsets.reserve(peptides.size());
     for(auto *p:peptides){size_t cap=p->sPeptide.size()+1;
         for(const auto &rule:rules)if(rule.toLen>1){require(cap<MaxText,"neutral loss expansion capacity");cap*=rule.toLen;}
         require(cap<=MaxText,"peptide text exceeds CUDA capacity 512");offsets.push_back(texts.size());capacities.push_back(cap);
@@ -247,9 +267,7 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
     }
     MVH_PROFILE_END(textRange);
     int n=peptides.size();
-    auto prepared=std::make_unique<PreparedPeptides>();
     prepared->texts=std::make_unique<Buffer<char>>(texts);
-    prepared->offsets=offsets;
     Buffer<uint64_t>dOffsets(offsets);Buffer<int>dCap(capacities),dLengths(n),dErrors(n);Buffer<Rule>dRules(rules);
     MVH_PROFILE_BEGIN(peptideKernelRange, "mvh/preprocess/peptides/kernel_and_wait");
     preprocessingMVH<<<(n+127)/128,128>>>(prepared->texts->p,dOffsets.p,dCap.p,n,dRules.p,rules.size(),dLengths.p,dErrors.p);synced();
@@ -450,6 +468,7 @@ std::unique_ptr<ScoringSpectra> scoringSpectra;
 void resetScoringSpectra() {
     MVH_PROFILE_SCOPE("mvh/function/resetScoringSpectra");
     scoringSpectra.reset();
+    resetBatchWorkspace();
 }
 
 ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const Config& config) {
@@ -525,19 +544,56 @@ ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const 
     return *scoringSpectra;
 }
 
-// Host work scales with peptides and scans, not with millions of associations.
-struct PackedScoringBatch {
+// Retain only host capacity between serial scoring calls. Dataset reset and
+// scope exit release it; device allocations remain batch-local.
+struct HostScoringWorkspace {
     std::vector<Scan> scans;
     std::vector<PeptideInput> peptides;
-    std::vector<Peptide *> peptideObjects;
-    std::unique_ptr<PreparedPeptides> prepared;
     std::vector<Top> initialTop;
-    ScoringSpectra* spectra = nullptr; // Owned by the dataset, reset before preprocessing.
-    std::unique_ptr<BatchSequenceIds> sequenceIds;
+    BatchSequenceIds sequenceIds{0};
+    std::vector<ScoringEvent> events;
+    std::vector<Top> finalTop;
+    std::vector<ScanCounts> counts;
+};
+std::unique_ptr<HostScoringWorkspace> hostScoringWorkspace;
+void resetBatchWorkspace() {
+    MVH_PROFILE_SCOPE("mvh/host/release_reusable_workspace");
+    hostScoringWorkspace.reset();
+    peptideHostScratch.reset();
+    // Also clean up an interrupted preparation/assignment before the next dataset.
+    preparedPeptides.reset();
+    assignedBatch.reset();
+}
+HostScoringWorkspace& scoringWorkspace() {
+    if (!hostScoringWorkspace)
+        hostScoringWorkspace = std::make_unique<HostScoringWorkspace>();
+    return *hostScoringWorkspace;
+}
+
+// References are valid through synchronous result restoration. The caller
+// retains the peptide pointer array until scorePeptidesMVH returns.
+struct PackedScoringBatch {
+    explicit PackedScoringBatch(HostScoringWorkspace& workspace,
+                                const std::vector<Peptide*>& objects)
+        : scans(workspace.scans), peptides(workspace.peptides),
+          peptideObjects(objects), initialTop(workspace.initialTop),
+          sequenceIds(workspace.sequenceIds) {
+        peptides.clear();
+        initialTop.clear(); // resize below must zero entries unused by shorter Top lists.
+        MVH_PROFILE_SCOPE("mvh/pack/reset_sequence_ids");
+        sequenceIds.reset(objects.size());
+    }
+    std::vector<Scan>& scans;
+    std::vector<PeptideInput>& peptides;
+    const std::vector<Peptide *>& peptideObjects;
+    std::unique_ptr<PreparedPeptides> prepared;
+    std::vector<Top>& initialTop;
+    ScoringSpectra* spectra = nullptr;
+    BatchSequenceIds& sequenceIds;
     std::unique_ptr<AssignedBatch> assignment;
 
     int sequenceId(const std::string &sequence) {
-        return sequenceIds->get(sequence);
+        return sequenceIds.get(sequence);
     }
 };
 
@@ -546,12 +602,10 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
                                    const Config &config) {
     MVH_PROFILE_SCOPE("mvh/pack/all");
     MVH_PROFILE_BEGIN(setupRange, "mvh/pack/setup");
-    PackedScoringBatch batch;
-    batch.peptideObjects = peptides;
+    PackedScoringBatch batch(scoringWorkspace(), peptides);
     batch.prepared = std::move(preparedPeptides);
     require(batch.prepared && batch.prepared->offsets.size() == peptides.size(),
             "peptide preprocessing must precede scoring");
-    batch.sequenceIds = std::make_unique<BatchSequenceIds>(peptides.size());
     batch.peptides.reserve(peptides.size());
     batch.assignment = std::move(assignedBatch);
     // The synthetic contract test supplies associations directly. Production
@@ -596,10 +650,12 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
 }
 
 struct ScoringOutput {
+    explicit ScoringOutput(HostScoringWorkspace& workspace)
+        : events(workspace.events), finalTop(workspace.finalTop), counts(workspace.counts) {}
     ScoreImpactBatch scoreImpact;
-    std::vector<ScoringEvent> events;
-    std::vector<Top> finalTop;
-    std::vector<ScanCounts> counts;
+    std::vector<ScoringEvent>& events;
+    std::vector<Top>& finalTop;
+    std::vector<ScanCounts>& counts;
     double allocationAndUploadSeconds=0, theorySeconds=0, kernelSeconds=0;
     double retentionSeconds=0, compactionSeconds=0, downloadSeconds=0;
     uint64_t cachedIonCount=0;
@@ -624,7 +680,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     // Declared before buffers so the cleanup range ends after their destructors.
     MVH_PROFILE_DEFER(deviceCleanupRange, "mvh/gpu/release_temporaries");
     MVH_PROFILE_BEGIN(uploadRange, "mvh/gpu/allocate_upload");
-    ScoringOutput output;
+    ScoringOutput output(scoringWorkspace());
     const double uploadStart = now();
     const auto &candidates = *batch.assignment->candidates;
     const int size = candidates.n, scanCount = batch.scans.size();
@@ -917,6 +973,8 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
 void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *> &peptides) {
     MVH_PROFILE_SCOPE("mvh/function/scorePeptidesMVH");
     MVH_PROFILE_SCOPE("mvh/batch/score_and_restore");
+    // Reusable host arrays survive this range; resetBatchWorkspace measures
+    // their dataset-level release separately. Prepared/device resources remain local.
     MVH_PROFILE_DEFER(batchCleanupRange, "mvh/host/release_packed_batch");
     initialize();
     const double start = now();

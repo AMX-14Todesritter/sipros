@@ -2,6 +2,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <random>
+#include <unordered_map>
+#include <vector>
 
 static void require(bool ok) {
     if (!ok) throw std::runtime_error("Sequence ID ownership/order contract failed");
@@ -20,5 +23,52 @@ int main() {
         require(ids.get("peptide-" + std::to_string(i)) == i + 3);
     mvh_cuda::BatchSequenceIds nextBatch(1);
     require(nextBatch.get(source) == 0);
+    // Force one probe chain, including wraparound, without triggering growth.
+    mvh_cuda::BatchSequenceIds collisions(0);
+    std::vector<std::string> collidingKeys;
+    for (int i = 0; collidingKeys.size() < 4; ++i) {
+        auto key = "collision-" + std::to_string(i);
+        if ((std::hash<std::string_view>{}(key) & 7) == 7)
+            collidingKeys.push_back(std::move(key));
+    }
+    for (int i = 0; i < 4; ++i) require(collisions.get(collidingKeys[i]) == i);
+    for (int i = 3; i >= 0; --i) require(collisions.get(collidingKeys[i]) == i);
+
+    // Differential coverage: duplicates, binary keys, common prefixes, and
+    // repeated growth with no capacity estimate (including an empty first key).
+    mvh_cuda::BatchSequenceIds growing(0);
+    std::unordered_map<std::string, int> reference;
+    std::vector<std::string> keys = {"", std::string("A\0B", 3), "A", "AB"};
+    std::mt19937 random(12345);
+    for (int i = 0; i < 50000; ++i) {
+        std::string key(30, 'A');
+        key += std::to_string(random() % 20000);
+        if (i % 7 == 0) key.append(1000, 'Z');
+        keys.push_back(std::move(key));
+    }
+    for (const auto& key : keys) {
+        const int expected = static_cast<int>(reference.size());
+        const auto inserted = reference.emplace(key, expected);
+        require(growing.get(key) == inserted.first->second);
+    }
+    for (auto it = keys.rbegin(); it != keys.rend(); ++it)
+        require(growing.get(*it) == reference.at(*it));
+    // Reusing a large workspace for smaller/empty batches must restart IDs and
+    // remove all old keys, even when hash slots and byte capacity are retained.
+    for (const std::size_t expected : {std::size_t(0), std::size_t(1), std::size_t(60000)}) {
+        growing.reset(expected);
+        require(growing.get("new-first") == 0);
+        require(growing.get(keys.back()) == 1);
+        require(growing.get("") == 2);
+        require(growing.get("new-first") == 0);
+        reference.clear();
+        reference.emplace("new-first", 0);
+        reference.emplace(keys.back(), 1);
+        reference.emplace("", 2);
+        for (const auto& key : keys) {
+            const auto inserted = reference.emplace(key, static_cast<int>(reference.size()));
+            require(growing.get(key) == inserted.first->second);
+        }
+    }
     std::cout << "PASS: owned keys, duplicates, first-seen IDs, rehash and independent batches\n";
 }

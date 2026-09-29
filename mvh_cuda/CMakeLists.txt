@@ -159,3 +159,7 @@ if(MVH_ENABLE_FLOW_COUNTERS)
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_flow_profile.py" --binary $<TARGET_FILE:sipros_mvh_cuda>)
   endif()
 endif()
+
+add_executable(sequence_ids_reuse_contract tests/sequence_ids_reuse_contract.cpp)
+target_include_directories(sequence_ids_reuse_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_test(NAME sequence_ids_reuse_contract COMMAND sequence_ids_reuse_contract)

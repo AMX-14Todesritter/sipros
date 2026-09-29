@@ -59,7 +59,9 @@ not enabled in full performance captures.
 
 A geometric fragment hit here means **at least one retained, preprocessed
 experimental peak** satisfies `abs(experimental_mz - theoretical_mz) < tolerance`.
-It counts at most one hit per query, including class 0. It does not count raw peaks
+It counts at most one hit per query, including class 0. A query is one logical
+backend lookup, not a ray count (triangles can trace two rays) or the number of
+experimental peaks examined by the CUDA bucket loop. It does not count raw peaks
 removed during scan preprocessing. An observational binary search on the sorted
 peak array tests this independently of the selected matcher and never feeds the
 score. RT float geometry and class-0 policy can differ; consequently
@@ -79,7 +81,7 @@ means `scoring.cuh::scoreCandidate`, and `host` means the aggregation in
 | `total_associations_entering_fragment_stage` | score: one for every non-skipped association |
 | `total_associations_rejected_before_fragment_stage` | score: `scan.skip` early return |
 | `total_associations_with_queries` | score: `ions.predicted > 0` |
-| `total_theoretical_fragment_ions_generated` | physical emissions from ALL calls to `CalculateSequenceIons`, including cache sizing and cache fill passes; not unique ions |
+| `total_theoretical_fragment_ions_generated` | source-level sink emissions from ALL calls to `CalculateSequenceIons`, including cache sizing and cache fill passes; not unique ions |
 | `total_fragment_queries` | score: number of in-scan-range `Counter::add` calls |
 | `total_fragment_hits` | observer: query has any experimental peak strictly within tolerance |
 | `total_fragment_misses` | queries minus geometric hits |
@@ -98,6 +100,12 @@ means `scoring.cuh::scoreCandidate`, and `host` means the aggregation in
 | `total_cache_count_generation_calls`, `total_cache_count_ions` | `theoretical.cuh::countCacheWork`: active keys and offsets representing the count pass, even if materialization is rejected |
 | `total_cache_store_generation_calls`, `total_cache_stored_ions` | cache observer: valid active keys and offsets, only if fill pass executed |
 | `total_theoretical_ion_generation_calls` | direct calls + cache-count calls + cache-store calls |
+
+Count-only cache sizing emits to `CountIons`, not an m/z array; the compiler can
+eliminate unused m/z arithmetic in that pass. Thus these are source-level
+generation/sink counts, not floating-point instruction counts. To count values
+emitted for actual scoring or cache storage, add `total_direct_generated_ions`
+and `total_cache_stored_ions`, excluding `total_cache_count_ions`.
 
 The global device buffer has 4096 striped shards (512 KiB with the current 16
 metrics). Each scoring thread accumulates ion counts locally and adds totals once
@@ -127,7 +135,10 @@ peptide or one call per association when a cache is active.
 `flow_timings.tsv` reports accumulated host NVTX-scope wall time, call count,
 average, and percentage of search time. Nested host intervals are inclusive and
 must not be summed. `gpu/scoring_fused` uses existing CUDA events and their existing
-completion wait. No additional synchronization is added inside the algorithm.
+completion wait. No `cudaDeviceSynchronize` or `cudaEventSynchronize` call was
+added. Allocation, zeroing and download of the small counter buffer are extra
+diagnostic API work (including any implicit waits). Counters are downloaded
+after the original result downloads; these costs are included in measured overhead.
 
 Direct generation, lookup and MVH arithmetic are interleaved inside one scoring
 kernel/OptiX launch. They do not have independent CUDA event boundaries. Their
@@ -163,3 +174,64 @@ time. Keep application NVTX ON for NSYS, or turn it OFF for a clean benchmark.
 Retain input/binary/PTX hashes, parameters, completion status, and full output
 hashes with each measurement. Never compare an NCU replay duration to normal wall
 time. Do not interpret differences between runs as an algorithmic speedup.
+
+## Completed Marine measurement (2026-09-29)
+
+Local artifacts: `output/validation/flow_profile_20260929/`.
+`analysis/REPORT.md` contains every counter and selected timing rows;
+`analysis/stage_timings.tsv` contains all measured stages, call counts and means;
+`manifest.json` records input/binary/PTX hashes and tool/source versions.
+
+The counted and counters-off reference searches produced byte-identical PSM files
+(SHA-256 `d4042ad87dc1b9dead74473e415d536a503209bca8c5b385f86d936a85a13e20`),
+also identical to the earlier 689.98 s run. All 78 batches had identical assignment
+counts and cache decisions. Fourteen existing CTests and two new flow/observer
+checks passed.
+
+The run generated 464,495,485 entries and 5,142,996,959 associations. Exactly
+44,966 associations were skipped before the fragment stage. The remaining
+5,142,951,993 all issued queries: 172,473,965,798 queries, 10,900,929,403 geometric
+hits and 161,573,036,395 misses. Associations with/without geometric evidence were
+4,701,020,682 / 441,931,311. Actual speculative MVH evaluations were 243,890,697;
+accepted insertion events were 10,746,049; final PSM rows were 2,187,208.
+
+Generation calls: 5,115,114,264 direct + 3,036,610 cache-count + 3,036,610 cache-fill
+= 5,121,187,484; ratios are 11.025269 per entry and 0.995759 per association.
+Only the final batch materialized a cache (144,577,160 stored ions, stride 9).
+There were 174,255,594,557 source-level sink emissions including the count pass,
+or 174,111,017,397 excluding that count-only pass. Cached replay raises the total
+ions offered to associations to 174,914,940,818.
+
+Counters-off NSYS search time was 708.437 s: packing 248.695 s (35.11%), peptide
+generation 173.035 s (24.42%), and the fused RT scoring kernel 81.370 s (11.49%).
+The first two CPU-side scopes total 59.53% of search time. The union of recorded
+GPU kernel and memory intervals in search was 101.654 s. This identifies CPU-side
+packing/generation as the principal end-to-end cost; it does not prove which
+component inside the fused GPU scorer is dominant. In particular, billions of
+generator calls do not by themselves establish a generation bottleneck.
+
+The counted search took 766.057 s, 8.13% above the reference capture. This is a
+single-run, different-capture-mode comparison, not an isolated overhead estimate.
+The observer includes an independent tolerance lookup; its fused scoring event
+time was 156.189 s, so use the counters-off timeline for GPU performance conclusions.
+No indexing, matching, tolerance, deduplication or retention optimization was made.
+
+## Implementation files
+
+| File | Changed functions / purpose |
+|---|---|
+| `mvh_cuda/CMakeLists.txt` | default-off counter option, consistent host/PTX definition, two test targets |
+| `mvh_cuda/include/flow_profile.h` | 64-bit device metric/shard schema |
+| `mvh_cuda/include/flow_host.h` | run aggregation, timing accumulation, TSV output |
+| `mvh_cuda/include/profiling.h` | `ScopedRange::resume/end`: optional host-time accumulation |
+| `mvh_cuda/cuda/types.cuh` | optional observer pointer in `Config`, no production `Result` change |
+| `mvh_cuda/cuda/scoring.cuh` | `flowAdd`, `IonCounter::observe/add`, `scoreCandidate` before retention |
+| `mvh_cuda/cuda/theoretical.cuh` | `countCacheWork`: observe existing active keys/offsets after cache admission |
+| `mvh_cuda/cuda/engine.cu` | `assignPeptides2Scans`, `executeScoringBatch`: totals, primary-backend routing and batch aggregation |
+| `mvh_cuda/app/runner.cpp` | `run`: reset and export final totals after PSM output |
+| `MVH_RT/gpu_bridge/custom_device.cu` | `SphereCounter::add`: invoke non-scoring observer |
+| `MVH_RT/gpu_bridge/device.cu` | `RtCounter::add`: same observer for legacy triangle backends |
+| `mvh_cuda/tests/check_flow_profile.py` | count identities, cached CUDA/RT sample searches |
+| `mvh_cuda/tests/flow_observer_contract.cu` | geometric-hit, class-0, strict-boundary and outside-range test |
+| `mvh_cuda/tests/analyze_flow_profile.py` | compare PSM/cache traces; search-scoped NSYS timing and final report |
+| `mvh_cuda/PROFILING.md`, `mvh_cuda/FLOW_PROFILING.md` | usage, source flow, counter/timing definitions and measured findings |

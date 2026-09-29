@@ -40,7 +40,10 @@ def main():
         log=(path.parent/(path.name+'.log')).read_text()
         assignment=re.findall(r'\[CUDA assignment\] generated=(\d+) assigned=(\d+) associations=(\d+)',log)
         cache=re.findall(r'cached_ions=(\d+) cache_charge_stride=(\d+)',log)
-        batch_traces[label]={'assignment':assignment,'cache':cache}
+        legacy=re.findall(r'\[CUDA scoring\] candidates=(\d+) calls=(\d+) success=(\d+) inrange=(\d+) matched=(\d+)',log)
+        legacy_totals=dict(zip(['candidates','calls','success','inrange','matched'],
+                              [sum(int(row[i]) for row in legacy) for i in range(5)]))
+        batch_traces[label]={'assignment':assignment,'cache':cache,'legacy_postmerge_totals':legacy_totals}
     assert batch_traces['counted']==batch_traces['reference'],'Batch association/cache decisions changed'
     assert sum(int(x[0]) for x in batch_traces['counted']['assignment'])==c['total_peptide_entries']
     assert sum(int(x[2]) for x in batch_traces['counted']['assignment'])==c['total_precursor_associations']
@@ -74,8 +77,15 @@ def main():
         for s,e,n in db.execute(f'select start,end,nameId from {t} where start>=? and end<=?',(begin,end)):
             api[strings.get(n,str(n))].append((s,e))
         for name,intervals in api.items():add('host_cuda_api_inclusive',name,intervals)
+    for name,count in [('theoretical_generation_inside_scoring',c['total_direct_generation_calls']),
+                       ('fragment_lookup_inside_scoring',c['total_fragment_queries']),
+                       ('mvh_arithmetic_inside_scoring',c['total_mvh_scores_computed'])]:
+        stages.append(dict(stage_name=name,timing_kind='fused_unavailable',total_time_seconds=None,
+            percentage_of_search_time=None,invocation_count=count,average_time_per_invocation=None))
+    stages.append(dict(stage_name='XCorr_WDP',timing_kind='not_executed',total_time_seconds=0,
+        percentage_of_search_time=0,invocation_count=0,average_time_per_invocation=None))
     with (a.output/'stage_timings.tsv').open('w') as f:
-        fields=list(stages[0]);w=csv.DictWriter(f,fields,delimiter='\t');w.writeheader();w.writerows(stages)
+        fields=list(stages[0]);w=csv.DictWriter(f,fields,delimiter='\t');w.writeheader();w.writerows({k:('NA' if v is None else v) for k,v in row.items()} for row in stages)
     gen=c['total_theoretical_ion_generation_calls']
     report={'batch_traces_identical':True,'batch_traces':batch_traces,'counters':c,'psm_sha256':hashes,'identical':True,'reference_search_seconds':seconds,
       'counted_search_seconds':float(observed['search_seconds']),
@@ -90,14 +100,21 @@ def main():
       f"PSM files identical: **yes** (`{hashes['reference']}`).",'',
       '| Counter | Count |','|---|---:|']
     lines += [f'| {k} | {v:,} |' for k,v in c.items()]
-    lines += ['',f'Generator calls / entry: **{gen/c["total_peptide_entries"]:.6f}**; calls / association: **{gen/c["total_precursor_associations"]:.6f}**.',
+    lines += ['',f"Legacy post-merge success: **{batch_traces['counted']['legacy_postmerge_totals']['success']:,}**, versus **{c['total_mvh_scores_computed']:,}** actual speculative MVH evaluations.",'',f'Generator calls / entry: **{gen/c["total_peptide_entries"]:.6f}**; calls / association: **{gen/c["total_precursor_associations"]:.6f}**.',
       '',f'Reference search: **{seconds:.3f} s**; counted search: **{float(observed["search_seconds"]):.3f} s**.',
       'Single-run comparison; reference includes NSYS and counted run includes geometric-hit observation. Do not interpret the delta as isolated instrumentation overhead.',
       '', '| Stage | Seconds | % search | Calls | Avg s | Kind |','|---|---:|---:|---:|---:|---|']
     wanted=['mvh/search/generate_peptides','mvh/batch/assign_scans','mvh/batch/preprocess_peptides','mvh/pack/all','mvh/pack/sequence_ids','mvh/pack/spectra_and_top','mvh/rt/prepare_or_reuse','mvh/gpu/theory_cache','mvh/gpu/retain_top','mvh/gpu/compact_results','mvh/gpu/download_results','mvh/host/restore_results','mvh/batch/delete_peptides']
     for r in stages:
-        if r['stage_name'] in wanted or (r['timing_kind']=='gpu_kernel' and ('optixLaunch' in r['stage_name'] or 'ScoreSequenceVsSpectrum(' in r['stage_name'])) or r['timing_kind']=='gpu_memory' or r['stage_name'] in ['cudaMemcpy','cudaDeviceSynchronize','cudaEventSynchronize','cudaMalloc','cudaFree']:
+        if r['stage_name'] in wanted or (r['timing_kind']=='gpu_kernel' and ('optixLaunch' in r['stage_name'] or 'ScoreSequenceVsSpectrum(' in r['stage_name'] or 'countTheoreticalIons(' in r['stage_name'] or 'generateTheoreticalIons(' in r['stage_name'])) or r['timing_kind']=='gpu_memory' or r['stage_name'].split('_v')[0] in ['cudaMemcpy','cudaDeviceSynchronize','cudaEventSynchronize','cudaMalloc','cudaFree']:
             lines.append(f"| {r['stage_name']} | {r['total_time_seconds']:.6f} | {r['percentage_of_search_time']:.3f} | {r['invocation_count']} | {r['average_time_per_invocation']:.6f} | {r['timing_kind']} |")
+    for r in stages:
+        if r['timing_kind']=='fused_unavailable':
+            lines.append(f"| {r['stage_name']} | NA | NA | {r['invocation_count']} | NA | fused, source-level calls |")
+    lines.append('| XCorr/WDP | 0 | 0 | 0 | NA | not executed |')
+    host={r['stage_name']:r['total_time_seconds'] for r in stages if r['timing_kind']=='host_inclusive'}
+    cpu_main=host.get('mvh/pack/all',0)+host.get('mvh/search/generate_peptides',0)
+    lines += ['',f"CPU-side packing plus peptide generation: **{cpu_main:.3f} s ({100*cpu_main/seconds:.2f}% of search)**. These two host scopes are disjoint. They dominate end-to-end time in this measurement; high generation-call counts alone do not establish a GPU arithmetic bottleneck."]
     lines += ['',f"Union of recorded GPU kernel/memory intervals during search: **{report['gpu_active_union_seconds_in_search']:.3f} s**.",
       'Host scopes are inclusive. CUDA waits overlap GPU execution; neither these rows nor parent/child stages can be summed.',
       'Direct theoretical generation, fragment lookup and MVH arithmetic are fused. Separate seconds are **not measurable with event boundaries in the unchanged kernel** and are reported as unavailable. XCorr/WDP are not executed.',

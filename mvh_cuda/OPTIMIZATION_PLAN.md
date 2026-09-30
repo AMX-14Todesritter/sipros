@@ -25,7 +25,7 @@
 1.227 → 1.077 秒（减少 12.2%）；进程峰值 RSS 约减少 12.4%。
 这是局部合成实验，不代表实际 141 秒阶段或全流程的加速比例。
 实验源码、前后头文件和记录位于
-`mvh_cuda/runs/sequence_ids_20260929/`（本地输出，未纳入版本控制）。
+`output/benchmarks/host_reuse/sequence_ids_20260929/`（本地输出，未纳入版本控制）。
 
 主机契约测试（g++、本地 CUDA 13.3 nvcc）与 ASan/UBSan 检查通过；沙箱 ptrace 环境不支持 LeakSanitizer，
 因此关闭了泄漏检测。当前缺少文档所述运行中的项目容器，完整 GPU CTest、

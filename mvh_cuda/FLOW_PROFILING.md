@@ -1,10 +1,32 @@
-# Database-search flow profiling (no search optimization)
+# Database-search flow profiling
 
 The known 689.98 s run used `rt-custom`, not the CUDA bucket matcher. This work
 keeps that backend, the Marine inputs, 6,000,000 generated entries per batch and
 host spectrum caching. The same counter implementation supports CUDA, triangles,
 instanced triangles, spheres, and diagnostic modes (counts follow the primary
 result, not the extra reference scoring).
+
+
+## Host workspace optimization integration
+
+The host-storage changes from `f7ef2a7838dfd2cf25c9cdd7a759c73fce923b99`
+are integrated with the existing profiling/counter code. Continuous sequence-ID
+storage, reset with retained capacity, preprocessing scratch and scoring/output
+workspace reuse are active; IDs still restart for each batch. Original profiling
+labels and GPU flow counters remain present.
+
+- `mvh/pack/reset_sequence_ids` is nested in `mvh/pack/setup`; it includes reset
+  and capacity preparation, not the subsequent sequence lookups.
+- `mvh/host/release_packed_batch` now covers only batch-local destruction. It no
+  longer includes freeing the retained host input/output arrays and ID table.
+- `mvh/host/release_reusable_workspace` measures dataset-level workspace release,
+  nested in `resetScoringSpectra`. The final search-scope teardown happens after
+  `flow_counters.tsv`/timing output is written, so use the NVTX trace for that final
+  release; the already-exported timing table cannot include it.
+
+Historical timing totals below describe their original binaries. Rebuild and
+identify both versions by hash before a new comparison; sum neither nested NVTX
+ranges nor teardown outside search into search time a second time.
 
 ## Exact pipeline
 

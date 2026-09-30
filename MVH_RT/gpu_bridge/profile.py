@@ -86,6 +86,7 @@ def capture_commands(args, inputs, output):
     if 'nsys' in args.tools:
         commands['nsys'] = ['nsys', 'profile', '--trace=cuda,nvtx,osrt', '--sample=none',
                             '--cpuctxsw=none', '--output='+str(output/'nsys_capture'),
+                            '--gpu-metrics-devices=all',
                             *search, '-o', str(output/'nsys_results')]
         commands['nsys_summary'] = ['nsys', 'stats', '--report',
                                     'nvtx_sum,cuda_gpu_kern_sum,cuda_api_sum',

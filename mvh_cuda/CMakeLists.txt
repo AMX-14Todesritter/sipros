@@ -42,7 +42,7 @@ set(ORIGINAL_SOURCES
   original/src/proNovoConfig.cpp original/src/proteindatabase.cpp
   original/src/ptm.cpp original/src/tokenvector.cpp)
 add_library(mvh_original STATIC ${ORIGINAL_SOURCES}
-  src/mvh_scan_vector.cpp src/spectrum_input.cpp src/database_search.cpp cuda/engine.cu cuda/score_impact.cu)
+  src/mvh_scan_vector.cpp src/spectrum_input.cpp src/database_search.cpp cuda/engine.cu cuda/score_impact.cu cuda/peptide_generation.cu src/generation_mass.cpp)
 target_include_directories(mvh_original PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/cuda"
@@ -163,3 +163,12 @@ endif()
 add_executable(sequence_ids_reuse_contract tests/sequence_ids_reuse_contract.cpp)
 target_include_directories(sequence_ids_reuse_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_test(NAME sequence_ids_reuse_contract COMMAND sequence_ids_reuse_contract)
+
+add_executable(peptide_batch_contract tests/peptide_batch_contract.cpp)
+target_include_directories(peptide_batch_contract PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_test(NAME peptide_batch_contract COMMAND peptide_batch_contract)
+
+add_executable(generation_contract tests/generation_contract.cpp)
+target_link_libraries(generation_contract PRIVATE mvh_original)
+add_test(NAME cuda_generation_contract COMMAND ${Python3_EXECUTABLE} -B
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_generation.py" --binary $<TARGET_FILE:generation_contract>)

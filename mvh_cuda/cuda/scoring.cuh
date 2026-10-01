@@ -231,14 +231,19 @@ __global__ void ScoreSequenceVsSpectrum(
 __global__ void scorePeptidesMVH(const Scan *scans, int size,
                                 const Candidate *candidates, const PeptideInput *peptides,
                                 const Top *initial, Top *finalTop, Result *results,
-                                ScanCounts *counts) {
+                                ScanCounts *counts, bool reuseTop = false) {
     const int scanId = blockIdx.x * blockDim.x + threadIdx.x;
     if (scanId >= size) return;
     const Scan &scan = scans[scanId];
     Top top[TopN];
-    int count = scan.topCount;
+    // Each scan owns its Top slice: initial and finalTop may alias safely.
+    // Read the preceding batch count before replacing this scan's statistics.
+    int count = reuseTop ? counts[scanId].topCount : scan.topCount;
     ScanCounts stats{};
-    for (int k = 0; k < count; ++k) top[k] = initial[uint64_t(scanId) * TopN + k];
+    for (int k = 0; k < count; ++k) {
+        top[k] = initial[uint64_t(scanId) * TopN + k];
+        top[k].source = -k-1;
+    }
     for (int i = 0; i < scan.candidates && !scan.skip; ++i) {
         const uint64_t index = scan.candidateOffset + i;
         auto &result = results[index];
@@ -255,9 +260,9 @@ __global__ void scorePeptidesMVH(const Scan *scans, int size,
         if (result.status != ResultScored) continue;
         ++stats.successes;
         if (count < TopN) {
-            top[count++] = {result.score, sequenceId};
+            top[count++] = {result.score, sequenceId, int(index)};
         } else if (result.score > top[TopN - 1].score) {
-            top[TopN - 1] = {result.score, sequenceId};
+            top[TopN - 1] = {result.score, sequenceId, int(index)};
         } else continue;
         result.status = ResultAccepted;
         saveScoreSort(top, count);
@@ -272,17 +277,44 @@ __global__ void scorePeptidesMVH(const Scan *scans, int size,
 struct KeepEveryCandidate {
     __device__ bool operator()(int) const { return true; }
 };
+// Only events after the last acceptance of a surviving sequence belong to
+// its protein history. An evicted/re-entered sequence starts a new history.
+__device__ inline int retainedEventRank(int index,const Result* results,
+        const Candidate* candidates,const PeptideInput* peptides,const Top* top,const ScanCounts* counts) {
+    const int status=results[index].status;
+    if(status!=ResultMerged && status!=ResultAccepted)return -1;
+    const auto candidate=candidates[index];
+    const int id=peptides[candidate.peptideId].sequenceId;
+    for(int rank=0;rank<counts[candidate.scanId].topCount;++rank) {
+        const auto entry=top[uint64_t(candidate.scanId)*TopN+rank];
+        if(entry.sequenceId==id &&
+           ((status==ResultAccepted && entry.source==index) ||
+            (status==ResultMerged && (entry.source<0 || index>entry.source))))return rank;
+    }
+    return -1;
+}
 struct KeepScoringEvent {
-    const Result *results;
+    const Result* results;
+    const Candidate* candidates;
+    const PeptideInput* peptides;
+    const Top* top;
+    const ScanCounts* counts;
+    bool finalOnly;
     __device__ bool operator()(int index) const {
-        return results[index].status == ResultMerged || results[index].status == ResultAccepted;
+        return finalOnly ? retainedEventRank(index,results,candidates,peptides,top,counts)>=0 :
+            results[index].status==ResultMerged || results[index].status==ResultAccepted;
     }
 };
 __global__ void gatherScoringEvents(const int *indices, int size,
                                    const Candidate *candidates, const Result *results,
-                                   ScoringEvent *events) {
+                                   ScoringEvent *events,const PeptideInput* peptides,
+                                   const Top* top,const ScanCounts* counts,bool deferred) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < size) events[i] = {candidates[indices[i]], results[indices[i]]};
+    if (i < size) {
+        const int index=indices[i];
+        events[i] = {candidates[index], results[index], index,
+            deferred ? retainedEventRank(index,results,candidates,peptides,top,counts) : -1};
+    }
 }
 __global__ void sortTest(Top *data,int count){int i=blockIdx.x*blockDim.x+threadIdx.x;if(i<count)saveScoreSort(data+uint64_t(i)*TopN,TopN);}
 }

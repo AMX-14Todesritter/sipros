@@ -1,6 +1,7 @@
 #include "runner.h"
 #include "engine.h"
 #include "profiling.h"
+#include "peptide_generation.h"
 #include "mvh_scan_vector.h"
 #include <iomanip>
 #include <stdexcept>
@@ -76,6 +77,8 @@ void mvh_app::run(const std::string &input, const std::string &config,
     report << std::setprecision(17) << "metric\tvalue\n"
            << "match_backend\t" << mvh_cuda::matchBackendName() << '\n'
            << "backend\tcuda\n"
+           << "result_restoration\t" << mvh_cuda::resultRestorationName() << '\n'
+           << "peptide_generation\t" << mvh_cuda::peptideGenerationName() << '\n'
            << "spectrum_cache\t" << (mvh_cuda::spectrumDeviceCache() ? "device" : "host") << '\n'
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
            << "peptide_batch_size\t" << mvh_cuda::peptideBatchSize() << '\n'

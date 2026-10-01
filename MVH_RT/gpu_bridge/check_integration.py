@@ -22,12 +22,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="gpu_rt_bridge_") as temporary:
         root = Path(temporary)
 
-        def run(name, mode, verify, batch, spectrum=None):
+        def run(name, mode, verify, batch, spectrum=None, fasta=None, generation="cuda", restoration="final"):
             output = root / name
             command = [str(args.binary), "-f", str(spectrum or data / "sample.ft2"),
-                       "-c", str(data / "search.cfg"), "-fasta", str(data / "proteins.fasta"),
+                       "-c", str(data / "search.cfg"), "-fasta", str(fasta or data / "proteins.fasta"),
                        "-o", str(output), "--match-backend", mode,
-                       "--peptide-batch-size", str(batch)]
+                       "--peptide-batch-size", str(batch), "--peptide-generation", generation, "--result-restoration", restoration]
             if verify:
                 command.append("--verify-cuda")
             result = subprocess.run(command, capture_output=True, text=True)
@@ -63,6 +63,25 @@ def main():
             assert all(count == 0 for count in bucket_entries(log, "device_bucket_entries")), log
             assert log.count("[RT GPU setup]") == 1, log
         assert len(set(sphere_outputs)) == 1, "Sphere outputs changed with batch size"
+
+        # Repeat identical peptides under different protein names across batch
+        # boundaries. Protein attribution must survive GPU-resident Top reuse.
+        repeated = root / "repeated.fasta"
+        sequence = "".join((data / "proteins.fasta").read_text().splitlines()[1:])
+        repeated.write_text("".join(f">protein_{i}\n{sequence}\n" for i in range(4)))
+        for mode in ("cuda", "rt-custom"):
+            reference, _ = run(f"{mode}_repeat_reference", mode, False, 2000000, fasta=repeated)
+            reference_psms = (reference / "mvh_psms.tsv").read_bytes()
+            immediate, _ = run(f"{mode}_batch_restore", mode, False, 3, fasta=repeated, restoration="batch")
+            assert (immediate / "mvh_psms.tsv").read_bytes() == reference_psms, "Final/batch restoration changed PSMs"
+
+            cpu, _ = run(f"{mode}_cpu_generation", mode, False, 3, fasta=repeated, generation="cpu")
+            assert (cpu / "mvh_psms.tsv").read_bytes() == reference_psms, "CPU/GPU generation changed PSMs"
+
+            for verify in (False, True):
+                output, _ = run(f"{mode}_repeat_{verify}", mode, verify, 3, fasta=repeated)
+                assert (output / "mvh_psms.tsv").read_bytes() == reference_psms, \
+                    "Cross-batch Top changed scores, ordering or protein merges"
 
         # Exercise an empty pre-index peak map: no PeakList may be dereferenced.
         skipped = root / "skipped.ft2"

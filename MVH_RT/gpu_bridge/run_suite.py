@@ -17,6 +17,7 @@ p.add_argument('--scans', type=Path, help='Override dataset FT2')
 p.add_argument('--config', type=Path, help='Override dataset configuration')
 p.add_argument('--batch', type=int, default=4000000)
 p.add_argument('--repeats', type=int, default=1)
+p.add_argument('--order', choices=['rotate', 'alternate'], default='rotate')
 p.add_argument('--backends', nargs='+', choices=['cpu','cuda','rt-triangle','rt-instanced','rt-custom'],
                default=['cpu','cuda','rt-triangle','rt-instanced','rt-custom'])
 p.add_argument('--output', type=Path, help='New directory inside container')
@@ -71,7 +72,7 @@ try:
             run(['ctest','--test-dir',root/build,'--output-on-failure'],f'tests_{name}.log')
     command = [sys.executable,root/'MVH_RT/gpu_bridge/benchmark.py','--root',root,
                '--output',output/'benchmark','--fasta',fasta,'--scans',scans,'--config',config,
-               '--batch',str(a.batch),'--repeats',str(a.repeats),'--backends',*a.backends]
+               '--batch',str(a.batch),'--repeats',str(a.repeats),'--order',a.order,'--backends',*a.backends]
     # Inherit stdout: benchmark emits START/DONE so long searches remain visible.
     subprocess.run(list(map(str,command)),env=env,check=True)
     print('FINISHED:',output/'benchmark/REPORT.md',flush=True)

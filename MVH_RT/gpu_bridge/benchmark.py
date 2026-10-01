@@ -27,6 +27,8 @@ p.add_argument('--fasta', type=Path, help='FASTA override; default is raw/Ecoli.
 p.add_argument('--backends', nargs='+', choices=['cpu', 'cuda', 'rt-triangle', 'rt-instanced', 'rt-custom'],
                default=['cpu', 'cuda', 'rt-triangle'])
 p.add_argument('--repeats', type=int, default=3)
+p.add_argument('--order', choices=['rotate', 'alternate'], default='rotate',
+               help='rotate swaps the starting backend each round; alternate repeats the listed backend order')
 a = p.parse_args()
 if a.repeats < 1 or a.batch < 1:
     p.error('--repeats and --batch must be positive')
@@ -77,6 +79,7 @@ report = {
     'cpu_batch_generated_peptides': a.batch,
     'cpu_threads': 4,
     'verification': False,
+    'run_order_policy': a.order,
     'memory_scope': '50ms sampling; VmHWM/VmRSS from process; NVML device-wide used includes other processes',
     'runs': [],
 }
@@ -102,8 +105,10 @@ def interrupt(signum, frame):
 
 signal.signal(signal.SIGINT, interrupt)
 signal.signal(signal.SIGTERM, interrupt)
-orders = [a.backends[i % len(a.backends):] + a.backends[:i % len(a.backends)]
-          for i in range(a.repeats)]
+orders = ([list(a.backends) for _ in range(a.repeats)] if a.order == 'alternate' else
+          [a.backends[i % len(a.backends):] + a.backends[:i % len(a.backends)]
+           for i in range(a.repeats)])
+report['scheduled_run_order'] = [f'{backend}_{i}' for i, order in enumerate(orders, 1) for backend in order]
 save()
 try:
     for repeat, order in enumerate(orders, 1):

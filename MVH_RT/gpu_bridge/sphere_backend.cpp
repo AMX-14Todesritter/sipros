@@ -3,6 +3,7 @@
 #include "scene_resources.h"
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace mvh_rt_gpu::sphere_backend {
 namespace {
@@ -10,6 +11,8 @@ struct SphereState {
     SceneResources scene;
     std::unique_ptr<DeviceBuffer<float3>> centers;
     std::unique_ptr<DeviceBuffer<float>> radius;
+    std::unique_ptr<DeviceBuffer<uint64_t>> offsets;
+    std::unique_ptr<DeviceBuffer<unsigned>> peakIndices;
     double fragmentTolerance = 0;
     int classCount = 0;
     float rayOriginY = 0;
@@ -19,8 +22,8 @@ std::unique_ptr<SphereState> state;
 
 void validateConfiguration(const mvh_cuda::Config& config) {
     const float radius = static_cast<float>(config.fragmentTolerance);
-    if (!std::isfinite(config.fragmentTolerance) || radius <= 0 || radius >= 1)
-        throw std::runtime_error("Sphere RT requires a radius in (0, 1) for unit class spacing");
+    if (!std::isfinite(config.fragmentTolerance) || radius <= 0 || radius >= 0.5f)
+        throw std::runtime_error("Sphere RT requires a radius in (0, 0.5) for integer-column separation and ray origin z=0.5");
     if (config.classes < 1 || config.classes > mvh_cuda::MaxClasses)
         throw std::runtime_error("Sphere RT class count is outside the supported range");
 }
@@ -48,12 +51,16 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     createPipeline(next->scene.objects, MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
 
     const float radius = static_cast<float>(config.fragmentTolerance);
-    next->centers = std::make_unique<DeviceBuffer<float3>>(peakCount);
+    const auto offsets = sphereCenterOffsets(peaks, peakCount, config.fragmentTolerance);
+    const size_t centerCount = offsets.back();
+    next->offsets = std::make_unique<DeviceBuffer<uint64_t>>(offsets);
+    next->centers = std::make_unique<DeviceBuffer<float3>>(centerCount);
+    next->peakIndices = std::make_unique<DeviceBuffer<unsigned>>(centerCount);
     next->radius = std::make_unique<DeviceBuffer<float>>(std::vector<float>{radius});
-    generateSphereCenters(peaks, classes, next->centers->data, peakCount);
-    // Raw class is the y coordinate. Start above all spheres and cover class 0.
-    next->rayOriginY = float(config.classes) + radius + 1.0f;
-    next->rayTmax = next->rayOriginY + radius + 1.0f;
+    generateSphereCenters(peaks, next->offsets->data, next->centers->data,
+                          next->peakIndices->data, peakCount, config.fragmentTolerance);
+    next->rayOriginY = 0.5f; // Retained Params ABI field; custom rays use z=0.5.
+    next->rayTmax = 1.0f;
     checkCuda(cudaDeviceSynchronize());
 
     OptixAccelBuildOptions options{};
@@ -67,12 +74,15 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     for (size_t i = 0; i < scans.size(); ++i) {
         const auto& scan = scans[i];
         if (scan.skip || !scan.peaks) continue;
-        centerAddresses[i] = next->centers->address() + scan.peakOffset * sizeof(float3);
+        centerAddresses[i] = next->centers->address() + offsets[scan.peakOffset] * sizeof(float3);
         inputs[i].type = OPTIX_BUILD_INPUT_TYPE_SPHERES;
         auto& input = inputs[i].sphereArray;
         input.vertexBuffers = &centerAddresses[i];
         input.vertexStrideInBytes = sizeof(float3);
-        input.numVertices = scan.peaks;
+        const auto count = offsets[scan.peakOffset + scan.peaks] - offsets[scan.peakOffset];
+        if (count > std::numeric_limits<unsigned>::max())
+            throw std::runtime_error("Sphere count exceeds OptiX scan index capacity");
+        input.numVertices = unsigned(count);
         input.radiusBuffers = &radiusAddress;
         input.radiusStrideInBytes = sizeof(float);
         input.singleRadius = 1;
@@ -83,10 +93,10 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     next->scene.initializeSbt();
     state = std::move(next);
     std::cout << "[RT GPU setup] scans=" << scans.size()
-              << " geometry=class-positioned-spheres active_scans=" << stats.activeScans
+              << " geometry=split-mz-spheres active_scans=" << stats.activeScans
               << " as_bytes=" << stats.outputBytes
               << " scratch_bytes=" << stats.scratchBytes
-              << " geometry_bytes=" << peakCount * sizeof(float3) + sizeof(float)
+              << " geometry_bytes=" << centerCount * (sizeof(float3) + sizeof(unsigned)) + offsets.size() * sizeof(uint64_t) + sizeof(float)
               << " instance_bytes=" << sizeof(OptixInstance) << '\n';
 }
 
@@ -94,6 +104,8 @@ void launch(Params params) {
     if (!state) throw std::runtime_error("Sphere RT resources not prepared");
     if (params.cfg.fragmentTolerance != state->fragmentTolerance || params.cfg.classes != state->classCount)
         throw std::runtime_error("Sphere RT launch configuration differs from prepared geometry");
+    params.sphereOffsets = state->offsets->data;
+    params.spherePeakIndices = state->peakIndices->data;
     params.rayOriginY = state->rayOriginY;
     params.rayTmax = state->rayTmax;
     params.instanced = false;

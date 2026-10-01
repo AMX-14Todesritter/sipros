@@ -30,7 +30,7 @@ std::size_t writePsms(const std::string &path, const std::string &input,
 }
 
 void mvh_app::run(const std::string &input, const std::string &config,
-                  const std::string &fasta, const std::string &output, int threads) {
+                  const std::string &fasta, const std::string &output, int threads, int batchSize) {
     omp_set_num_threads(threads);
     const double begin = omp_get_wtime();
     if (!ProNovoConfig::setFilename(config)) throw std::runtime_error("Cannot load config");
@@ -44,6 +44,7 @@ void mvh_app::run(const std::string &input, const std::string &config,
         throw std::runtime_error("Output directory must not already exist");
     std::filesystem::copy_file(config, std::filesystem::path(output)/"input_config.cfg");
     MvhScanVector spectra(input, output, config, true);
+    spectra.peptideBatchSize = batchSize;
     if (!spectra.loadMassData()) throw std::runtime_error("Cannot load spectra");
     const double loaded = omp_get_wtime();
     const auto &scans = spectra.vpAllMS2Scans;
@@ -60,7 +61,7 @@ void mvh_app::run(const std::string &input, const std::string &config,
     report.exceptions(std::ios::failbit | std::ios::badbit);
     report << std::setprecision(17) << "metric\tvalue\n"
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
-           << "peptide_batch_size\t" << PEPTIDE_ARRAY_SIZE << '\n'
+           << "peptide_batch_size\t" << batchSize << '\n'
            << "config_and_load_seconds\t" << loaded-begin << '\n'
            << "preprocess_seconds\t" << prepared-loaded << '\n'
            << "search_seconds\t" << searched-prepared << '\n'

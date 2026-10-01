@@ -37,8 +37,8 @@ __device__ void saveScoreSort(Top *a,int n){
     // Guarded insertion has the same shifts as the final guarded/unguarded passes.
     for(int i=1;i<n;++i){Top value=a[i];int j=i;while(j>0&&GreaterScore(value,a[j-1])){a[j]=a[j-1];--j;}a[j]=value;}
 }
-// Select within the strict tolerance: highest positive class, then nearest m/z.
-// A return value of 0 means no scored peak; class-0 peaks are excluded.
+// Select the nearest peak within strict tolerance, regardless of its class.
+// Equal distances retain the first encountered peak; class 0 remains unscored.
 __device__ int findNear(double mz, double tolerance, const Scan &scan,
                         const double *peaks, const int *classes, const short *hub) {
     if (!scan.peaks) return 0;
@@ -60,16 +60,12 @@ __device__ int findNear(double mz, double tolerance, const Scan &scan,
         for (int i = first; i < last; ++i) {
             const auto peakIndex = scan.peakOffset + i;
             const int candidateClass = classes[peakIndex];
-            if (candidateClass <= 0) continue;
 
             const double distance = fabs(mz - peaks[peakIndex]);
             // Bucket membership is only a coarse filter, not a tolerance test.
             if (!(distance < tolerance)) continue;
 
-            const bool higherClass = candidateClass > bestClass;
-            const bool closerInSameClass =
-                candidateClass == bestClass && distance < bestDistance;
-            if (higherClass || closerInSameClass) {
+            if (distance < bestDistance) {
                 bestClass = candidateClass;
                 bestDistance = distance;
             }

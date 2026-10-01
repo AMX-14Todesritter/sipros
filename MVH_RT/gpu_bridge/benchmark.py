@@ -74,6 +74,7 @@ report = {
     'inputs_sha256': {str(f): sha(f) for f in inputs},
     'binaries_sha256': {str(f): sha(f) for f in (cpu, gpu)},
     'gpu_batch_generated_peptides': a.batch,
+    'cpu_batch_generated_peptides': a.batch,
     'cpu_threads': 4,
     'verification': False,
     'memory_scope': '50ms sampling; VmHWM/VmRSS from process; NVML device-wide used includes other processes',
@@ -110,9 +111,9 @@ try:
             name = f'{backend}_{repeat}'
             output = a.output / name
             command = [str(cpu if backend == 'cpu' else gpu), '-f', str(inputs[0]),
-                       '-c', str(inputs[1]), '-fasta', str(inputs[2]), '-o', str(output), '-t', '4']
+                       '-c', str(inputs[1]), '-fasta', str(inputs[2]), '-o', str(output), '-t', '4', '--peptide-batch-size', str(a.batch)]
             if backend != 'cpu':
-                command += ['--match-backend', backend, '--peptide-batch-size', str(a.batch)]
+                command += ['--match-backend', backend]
             before = gpu_memory()
             peak_gpu, peak_rss, hwm = before, 0, 0
             samples = 0

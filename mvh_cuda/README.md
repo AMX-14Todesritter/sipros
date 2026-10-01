@@ -120,7 +120,7 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 
 需要量化 RT 对 MVH 分数及最终 top 候选的影响时，使用 [评分影响验证脚本](../MVH_RT/gpu_bridge/README.md#用-mvh-分数和最终-top-候选评估差异)。`--score-impact` 为显式诊断开关，默认关闭，诊断耗时不作性能指标。
 
-实验 RT 构建可选 `--match-backend rt-custom`，当前采用 `(m/z, 原始 class, 0)` 内置 sphere 和向下 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
+实验 RT 构建可选 `--match-backend rt-custom`，当前采用整数/小数拆分坐标内置 sphere 和沿 −z 的 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
 
 This branch retains only run-level timing and ordinary counters; application NVTX
 and fine-grained timers have been removed. See [timing and build contract](PROFILING.md).
@@ -169,24 +169,13 @@ Old `packing_optimized` and `profile_enabled` binaries may still contain profili
 they are historical artifacts, not builds of the current clean source. Both spectrum
 cache modes remain available through `--spectrum-cache host|device`.
 
-## Peak selection: positive class priority
+## Peak selection: nearest mass
 
-The default CUDA bucket matcher now uses the same rule as the modified CPU
-`PeakList::findNear`: first require `abs(peakMz - queryMz) < tolerance` and
-`class > 0`, then prefer the larger class number, breaking equal-class ties by
-smaller distance. Exact class/distance ties retain the first encountered peak.
-Class 0 is excluded from candidate selection; no hit contributes to MVH's
-unmatched bin. Raw class numbers are not remapped (class 1 remains the strongest
-intensity group assigned by preprocessing).
+CPU and CUDA select the nearest experimental peak within strict
+`abs(peakMz-queryMz) < tolerance`, regardless of intensity class. Equal distances
+retain the first encountered peak. A nearest class-0 peak remains unscored.
 
-This changes peak selection from the historical nearest-mass baseline. Existing
-benchmark PSM hashes describe their original binaries, not the new rule. The
-CPU verifier in `original/src/ms2scan.cpp` is synchronized with `mvh/`; source
-identity tests permit only this matcher to differ from upstream. All other
-upstream methods and the MVH scoring formula remain checked.
-
-The triangle and sphere tracing implementations are not changed by this matcher
-update. Sphere still uses float geometric intersection, so boundary agreement
-with the double-precision CPU/CUDA rule must be validated separately.
-
-A separate verified build for this change is `build/mvh_rt/class_priority`.
+RT-custom splits double m/z into integer and fractional float coordinates, adds
+boundary copies, and traces downward from z=0.5 through equal-radius spheres.
+Its float boundary and tie behavior still requires comparison with the double
+reference. See [sphere matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).

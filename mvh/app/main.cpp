@@ -14,12 +14,12 @@ int main(int argc, char **argv) {
             std::string key=argv[i];
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size count]\n";
                 std::cout << "Default output: output/search/mvh/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;
             }
-            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t")
+            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size")
                 throw std::runtime_error("Unknown option: "+key);
             if (++i==argc || options.count(key)) throw std::runtime_error("Missing/duplicate option: "+key);
             options[key]=argv[i];
@@ -31,6 +31,13 @@ int main(int argc, char **argv) {
             std::size_t used=0;
             threads=std::stoi(options["-t"], &used);
             if (used!=options["-t"].size() || threads<1) throw std::runtime_error("Invalid thread count");
+        }
+        int batchSize = 2000000;
+        if (options.count("--peptide-batch-size")) {
+            std::size_t used = 0;
+            batchSize = std::stoi(options["--peptide-batch-size"], &used);
+            if (used != options["--peptide-batch-size"].size() || batchSize < 1)
+                throw std::runtime_error("Invalid peptide batch size");
         }
         for (const auto *key : {"-f","-c","-fasta"}) {
             auto &path=options[key];
@@ -50,7 +57,7 @@ int main(int argc, char **argv) {
         }
         options["-o"]=std::filesystem::absolute(options["-o"]).lexically_normal().string();
         if (std::filesystem::exists(options["-o"])) throw std::runtime_error("Output already exists");
-        mvh_app::run(options["-f"],options["-c"],options["-fasta"],options["-o"],threads);
+        mvh_app::run(options["-f"],options["-c"],options["-fasta"],options["-o"],threads,batchSize);
         return 0;
     } catch (const std::exception &e) {
         std::cerr << "sipros_mvh: " << e.what() << '\n';

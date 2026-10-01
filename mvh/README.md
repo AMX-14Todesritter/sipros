@@ -2,7 +2,7 @@
 
 输出路径统一约定见 [OUTPUT_LAYOUT.md](../OUTPUT_LAYOUT.md)。省略输出参数时自动写入项目 `output/` 下的分类运行目录；已有显式输出路径仍然有效。
 
-本目录只有一个入口：读取谱图并预处理，然后运行提取后的 `MvhScanVector::searchDatabaseMvh()`（函数名和函数体保持原样）。没有 A/B 分支、快照加载、GPU 或新增函数 profiling。
+本目录只有一个入口：读取谱图并预处理，然后运行提取后的 `MvhScanVector::searchDatabaseMvh()`（函数名保留，批次阈值支持运行时配置）。没有 A/B 分支、快照加载、GPU 或新增函数 profiling。
 
 ## 目录
 
@@ -29,7 +29,7 @@ mvh/
 
 来源：`96161334d96c249abedef727962784653a90653b`。这不是当前带历史 profiling 的工作区源码。`original/src/` 和 `original/include/` 的 24 个文件均从该提交完整提取，逐字节相同，没有更改函数签名、函数体、宏、数据结构或注释。来源校验会比较实际 Git 内容，而不只是比较本地清单。
 
-实际运行的管理类为 `MvhScanVector`。21 个方法从原 `MS2ScanVector` 提取，方法定义仅替换类名；构造/析构名称随类名同步改变，普通函数名完全保留。类声明调整了访问权限并移除了 WDP/Xcorr、SIP 与 task 调度成员。`original/src/ms2scanvector.cpp` 不再编译，仅保留来源对照。其他原始依赖暂时仍按原翻译单元编译。
+实际运行的管理类为 `MvhScanVector`。21 个方法从原 `MS2ScanVector` 提取，方法定义除运行时生成肽段批次配置外仅替换类名；构造/析构名称随类名同步改变，普通函数名完全保留。类声明调整了访问权限并移除了 WDP/Xcorr、SIP 与 task 调度成员。`original/src/ms2scanvector.cpp` 不再编译，仅保留来源对照。其他原始依赖暂时仍按原翻译单元编译。
 
 原项目的类与翻译单元耦合较强，因此保留了其中 WDP/Xcorr/SIP 的定义及编译依赖，但本入口不调用这些后续流程。没有复制完整项目、第三方库、实验数据或构建目录；MSToolkit 使用仓库中的现有源码，与来源提交一致。当前模块需要父项目的 MSToolkit，不能单独拷走 mvh 后直接编译。
 
@@ -93,10 +93,10 @@ build/mvh/bin/sipros_mvh \
 - `run_summary.tsv`：配置/读谱、预处理、完整搜索调用、导出分别计时，外加 scan/skip/PSM 数量。不是函数内部 profiling。
 - `input_config.cfg`：配置副本。
 
-输入路径会写入 TSV；跨目录比较时应注意这个身份字段。峰匹配严格小于 tolerance、同误差保留先遇到的峰、多离子可命中同峰、候选合并的顺序依赖、批次大小 2,000,000 均继承原始实现。原代码本来存在的 CLOCKSTART/CLOCKSTOP 宏也没有删除。
+输入路径会写入 TSV；跨目录比较时应注意这个身份字段。峰匹配严格小于 tolerance、同误差保留先遇到的峰、多离子可命中同峰、候选合并的顺序依赖、最近峰匹配规则继承原始实现；批次大小默认 2,000,000，可用 `--peptide-batch-size` 配置，计数为生成肽段。原代码本来存在的 CLOCKSTART/CLOCKSTOP 宏也没有删除。
 
 ## 验证
 
-`verify_original.py` 检查 24 个原始对照/依赖文件与 Git 来源逐字节一致。`verify_extraction.py` 检查 21 个提取的方法定义，除类名外逐字一致，并确认入口使用直接调用。`check_run.py` 检查有效匹配/PTM、单线程和四线程一致、无匹配、跳过谱图，以及无效线程数和拒绝覆盖输出。测试使用保留的 scan 1004 单样本，仅验证集成行为；不能将它作为完整数据集的性能基准。
+`verify_original.py` 检查 24 个原始对照/依赖文件与 Git 来源逐字节一致。`verify_extraction.py` 检查 21 个提取的方法定义，除类名与已声明的批次配置改动外逐字一致，并确认入口使用直接调用。`check_run.py` 检查有效匹配/PTM、单线程和四线程一致、无匹配、跳过谱图，以及无效线程数和拒绝覆盖输出。测试使用保留的 scan 1004 单样本，仅验证集成行为；不能将它作为完整数据集的性能基准。
 
 独立类改造后的验证见 `CLASS_EXTRACTION_VALIDATION.md`；此前原样移植记录见 `VALIDATION.md`。旧 A/B/C 代码备份仍在父项目 `.reset-backup/`，不参加当前构建。

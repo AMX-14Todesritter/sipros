@@ -21,6 +21,8 @@ struct Params {
     const double *cachedIons;
     const OptixTraversableHandle *handles;
     int size, chargeStride, instanced;
+    const uint64_t *sphereOffsets;
+    const unsigned *spherePeakIndices;
     float rayOriginY;
     float rayTmax;
 };

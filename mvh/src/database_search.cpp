@@ -157,6 +157,7 @@ void MvhScanVector::searchDatabaseMvh()
 	Peptide *currentPeptide;
 	myProteinDatabase.loadDatabase();
 	this->preMvh();
+	size_t generatedPeptides = 0;
 	if (myProteinDatabase.getFirstProtein())
 	{
 		currentPeptide = new Peptide;
@@ -180,8 +181,10 @@ void MvhScanVector::searchDatabaseMvh()
 			// create a new peptide for the next iteration
 			currentPeptide = new Peptide;
 			// when the vpPeptideArray is full
-			if (vpPeptideArray.size() >= PEPTIDE_ARRAY_SIZE)
+			if (++generatedPeptides >= size_t(peptideBatchSize)) {
 				processPeptideArrayMvh(vpPeptideArray);
+				generatedPeptides = 0;
+			}
 		}
 		// the last peptide object is an empty object and need to be deleted
 		delete currentPeptide;

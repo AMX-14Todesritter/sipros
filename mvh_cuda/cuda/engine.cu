@@ -875,7 +875,7 @@ void runContractTests(){
         Buffer<double>dp(list.pPeaks),dq(q),dt(t);Buffer<int>dc(classes),result(q.size());Buffer<short>dh(list.pMassHub);
         matchContract<<<1,128>>>(s,dp.p,dc.p,dh.p,dq.p,dt.p,q.size(),result.p);synced();std::vector<int>got;result.read(got);
         for(size_t i=0;i<q.size();++i){char c=list.findNear(q[i],t[i]);int expected=c==list.end()?0:c;require(got[i]==expected,"findNear boundary/tie contract");}
-        require(got[0]==0&&got[1]==3,"strict tolerance and highest-class priority");
+        require(got[0]==0&&got[1]==2,"strict tolerance and first nearest peak");
     }
     {
         struct PeakSelectionCase {
@@ -886,13 +886,13 @@ void runContractTests(){
         };
         // Exactly representable distances keep these boundary cases unambiguous.
         const std::vector<PeakSelectionCase> cases{
-            {"higher class beats exact mass", {{100.0,1},{100.0625,3}}, 100.0,0.125,3},
+            {"nearest mass beats higher class", {{100.0,1},{100.0625,3}}, 100.0,0.125,1},
             {"outside higher class cannot mask a hit", {{100.0,1},{100.25,3}}, 100.0,0.125,1},
-            {"zero class cannot mask a positive hit", {{100.0,0},{100.0625,1}}, 100.0,0.125,1},
+            {"nearest zero class is unscored", {{100.0,0},{100.0625,1}}, 100.0,0.125,0},
             {"zero class alone is unscored", {{100.0,0}}, 100.0,0.125,0},
             {"strict tolerance boundary", {{100.125,3}}, 100.0,0.125,0},
             {"inside tolerance", {{100.125,3}}, 100.0,0.25,3},
-            {"class priority across buckets", {{99.9375,3},{100.0,1}}, 100.0,0.125,3},
+            {"nearest mass across buckets", {{99.9375,3},{100.0,1}}, 100.0,0.125,1},
             {"same class candidates", {{99.9375,2},{100.03125,2}}, 100.0,0.125,2},
             {"no in-range peak", {{100.25,3}}, 100.0,0.125,0},
             {"empty spectrum", {}, 100.0,0.125,0},

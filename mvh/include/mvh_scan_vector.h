@@ -24,6 +24,7 @@ public:
     bool loadMassData();
     void preProcessAllMs2Mvh();
     void searchDatabaseMvh();
+    int peptideBatchSize = PEPTIDE_ARRAY_SIZE;
 
     // Original member name; the application reads retained results after search.
     vector<MS2Scan *> vpAllMS2Scans;

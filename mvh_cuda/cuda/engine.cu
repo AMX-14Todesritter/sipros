@@ -23,6 +23,7 @@ namespace {
 void resetScoringSpectra();
 void resetBatchWorkspace();
 bool verification=false;
+bool deferSearchResults=true;
 bool scoreImpactEnabled = false;
 std::unique_ptr<ScoreImpactWriter> scoreImpactWriter;
 std::string matchBackend="cuda";
@@ -34,6 +35,7 @@ struct PreparedPeptides {
     std::vector<uint64_t> offsets;
 };
 std::unique_ptr<PreparedPeptides> preparedPeptides;
+std::unique_ptr<PeptideBatch> peptideInputs;
 struct PeptideHostScratch {
     std::vector<Rule> rules;
     std::vector<char> texts;
@@ -134,6 +136,12 @@ template<class T> void append(std::vector<T>&dest,const std::vector<T>&src){dest
 void same(double a,double b,const std::string &name){require(a==b,name+" differs: "+std::to_string(a)+" vs "+std::to_string(b));}
 }
 void setVerification(bool enabled){verification=enabled;}
+bool verificationEnabled(){return verification;}
+void setResultRestoration(const std::string& mode) {
+    require(mode=="batch" || mode=="final", "--result-restoration must be batch or final");
+    deferSearchResults=mode=="final";
+}
+const char* resultRestorationName(){return deferSearchResults ? "final" : "batch";}
 void setScoreImpact(bool enabled) {
     require(!enabled || matchBackend == "rt-triangle" || matchBackend == "rt-instanced" ||
             matchBackend == "rt-custom",
@@ -222,8 +230,8 @@ void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans){
              <<" host_bucket_entries="<<hostBucketEntries<<'\n';
 }
 
-void preprocessingMVH(std::vector<Peptide *> &peptides){
-    initialize();if(peptides.empty())return;
+void preprocessingMVH(const PeptideBatch& peptides){
+    initialize();
     if (!peptideHostScratch) peptideHostScratch = std::make_unique<PeptideHostScratch>();
     auto& scratch = *peptideHostScratch;
     auto& rules = scratch.rules;
@@ -242,30 +250,72 @@ void preprocessingMVH(std::vector<Peptide *> &peptides){
     auto prepared=std::make_unique<PreparedPeptides>();
     auto& offsets = prepared->offsets;
     offsets.reserve(peptides.size());
-    for(auto *p:peptides){size_t cap=p->sPeptide.size()+1;
+    size_t textBytes = 0;
+    for(size_t i=0;i<peptides.size();++i){size_t cap=peptides.sequence(i).size()+1;
         for(const auto &rule:rules)if(rule.toLen>1){require(cap<MaxText,"neutral loss expansion capacity");cap*=rule.toLen;}
-        require(cap<=MaxText,"peptide text exceeds CUDA capacity 512");offsets.push_back(texts.size());capacities.push_back(cap);
-        texts.resize(texts.size()+cap,0);std::memcpy(texts.data()+offsets.back(),p->sPeptide.data(),p->sPeptide.size());
+        require(cap<=MaxText,"peptide text exceeds CUDA capacity 512");offsets.push_back(textBytes);capacities.push_back(cap);
+        textBytes += cap;
     }
     int n=peptides.size();
-    prepared->texts=std::make_unique<Buffer<char>>(texts);
+    std::unique_ptr<Buffer<char>> originalTexts;
+    std::unique_ptr<Buffer<uint64_t>> originalOffsets;
+    if (textBytes == peptides.texts().size()) {
+        // Most configurations need no expansion: transform the compact upload
+        // directly, without a second device text buffer or offset upload.
+        prepared->texts = std::make_unique<Buffer<char>>(peptides.texts());
+    } else {
+        prepared->texts = std::make_unique<Buffer<char>>(textBytes);
+        originalTexts = std::make_unique<Buffer<char>>(peptides.texts());
+        originalOffsets = std::make_unique<Buffer<uint64_t>>(peptides.offsets());
+    }
     Buffer<uint64_t>dOffsets(offsets);Buffer<int>dCap(capacities),dLengths(n),dErrors(n);Buffer<Rule>dRules(rules);
-    preprocessingMVH<<<(n+127)/128,128>>>(prepared->texts->p,dOffsets.p,dCap.p,n,dRules.p,rules.size(),dLengths.p,dErrors.p);synced();
+    if (n) preprocessingMVH<<<(n+127)/128,128>>>(prepared->texts->p,dOffsets.p,dCap.p,n,dRules.p,rules.size(),dLengths.p,dErrors.p,originalTexts ? originalTexts->p : nullptr,
+        originalOffsets ? originalOffsets->p : nullptr);synced();
     // Only verification needs neutral-loss strings on the host. Normal search
     // keeps the transformed text resident through theoretical-ion generation.
     if(verification) prepared->texts->read(texts);
     dLengths.read(lengths);dErrors.read(errors);
     for(int i=0;i<n;++i){require(errors[i]==0,"neutral loss failed or self-repeating rule");require(lengths[i]<=MaxLength,"peptide exceeds 128 residues");
-        if(verification){
-            std::string neutral(texts.data()+offsets[i]);
-            Peptide ref;ref.sPeptide=peptides[i]->sPeptide;ref.preprocessingMVH();
-            require(ref.sNeutralLossPeptide==neutral&&ref.iPeptideLength==lengths[i],"peptide preprocessing mismatch");
-            peptides[i]->sNeutralLossPeptide=std::move(neutral);
-        }
-        peptides[i]->iPeptideLength=lengths[i];
     }
     preparedPeptides=std::move(prepared);
     std::cout<<"[CUDA peptide preprocessing] peptides="<<n<<" verified="<<verification<<'\n';
+}
+
+// CPU objects remain only at generation and result/verification boundaries.
+const PeptideBatch& packPeptideBatch(const std::vector<Peptide*>& peptides) {
+    if (!peptideInputs) peptideInputs = std::make_unique<PeptideBatch>();
+    peptideInputs->clear(peptides.size());
+    for (const auto* peptide : peptides)
+        peptideInputs->append(peptide->getPeptideMass(), peptide->sPeptide);
+    return *peptideInputs;
+}
+
+namespace {
+void restorePeptideMetadata(const PeptideBatch& inputs, const std::vector<Peptide*>& objects) {
+    require(inputs.size() == objects.size(), "Peptide restoration size mismatch");
+    require(bool(peptideHostScratch) && bool(preparedPeptides), "Peptide preprocessing missing");
+    const auto& scratch = *peptideHostScratch;
+    require(preparedPeptides->offsets.size() == inputs.size(), "Prepared peptide offsets mismatch");
+    require(scratch.lengths.size() == objects.size(), "Peptide lengths missing");
+    for (size_t i = 0; i < objects.size(); ++i) {
+        objects[i]->iPeptideLength = scratch.lengths[i];
+        if (verification) {
+            std::string neutral(scratch.texts.data() + preparedPeptides->offsets[i]);
+            Peptide ref;
+            ref.sPeptide = std::string(inputs.sequence(i));
+            ref.preprocessingMVH();
+            require(ref.sNeutralLossPeptide == neutral && ref.iPeptideLength == scratch.lengths[i],
+                    "peptide preprocessing mismatch");
+            objects[i]->sNeutralLossPeptide = std::move(neutral);
+        }
+    }
+}
+}
+
+void preprocessingMVH(std::vector<Peptide*>& peptides) {
+    const auto& inputs = packPeptideBatch(peptides);
+    preprocessingMVH(inputs);
+    if (!peptides.empty()) restorePeptideMetadata(inputs, peptides);
 }
 
 namespace {
@@ -290,7 +340,7 @@ uint64_t exclusiveOffsets(Buffer<uint64_t> &counts, Buffer<uint64_t> &offsets) {
 }
 }
 
-void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
+void assignPeptides2Scans(const PeptideBatch &peptides,
                          const std::vector<std::tuple<double, int, MS2Scan *>> &precursors,
                          const std::vector<MS2Scan *> &scans) {
     initialize();
@@ -305,9 +355,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
         batch->precursors.push_back({std::get<0>(entry), scanIds.at(std::get<2>(entry)), charge});
         batch->maxCharge = std::max(batch->maxCharge, charge);
     }
-    std::vector<double> masses;
-    masses.reserve(peptides.size());
-    for (auto *peptide : peptides) masses.push_back(peptide->getPeptideMass());
+    const auto& masses = peptides.masses();
     std::vector<std::pair<double, double>> originalWindows;
     ProNovoConfig::getPeptideMassWindows(0, originalWindows);
     std::vector<MassWindow> windows;
@@ -320,7 +368,7 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
     Buffer<int> rangeCounts(size);
     Buffer<uint64_t> counts(size + 1), offsets(size + 1);
     check(cudaMemset(counts.p, 0, counts.n * sizeof(uint64_t)));
-    GetAllRangeFromMass<<<(size + 127) / 128, 128>>>(deviceMasses.p, size,
+    if (size) GetAllRangeFromMass<<<(size + 127) / 128, 128>>>(deviceMasses.p, size,
         devicePrecursors.p, batch->precursors.size(), deviceWindows.p, windowCount,
         ranges.p, rangeCounts.p, counts.p);
     check(cudaGetLastError());
@@ -379,6 +427,12 @@ void assignPeptides2Scans(const std::vector<Peptide *> &peptides,
               << " associations=" << associations
               << " backend=" << matchBackend << " verified=" << verification << '\n';
     assignedBatch = std::move(batch);
+}
+
+void assignPeptides2Scans(const std::vector<Peptide*>& peptides,
+                         const std::vector<std::tuple<double, int, MS2Scan*>>& precursors,
+                         const std::vector<MS2Scan*>& scans) {
+    assignPeptides2Scans(packPeptideBatch(peptides), precursors, scans);
 }
 
 namespace {
@@ -504,21 +558,46 @@ ScoringSpectra& prepareScoringSpectra(const std::vector<MS2Scan*>& scans, const 
     return *scoringSpectra;
 }
 
-// Retain only host capacity between serial scoring calls. Dataset reset and
-// scope exit release it; device allocations remain batch-local.
+// Only surviving Top metadata is kept, without per-event PeptideUnit creation.
+struct PendingResult {
+    int sequenceId=-1, charge=0, length=0;
+    double score=0, measuredMass=0, calculatedMass=0;
+    std::string identified, original, proteins, neutral;
+    char identifyPrefix='-', identifySuffix='-', originalPrefix='-', originalSuffix='-';
+};
+// Bounded device capacity is reused between serial scoring calls. Large buffers
+// are released before the next assignment stage, which has a different peak.
 struct HostScoringWorkspace {
     std::vector<Scan> scans;
     std::vector<PeptideInput> peptides;
     std::vector<Top> initialTop;
     BatchSequenceIds sequenceIds{0};
+    std::unique_ptr<Buffer<Top>> deviceTop;
+    std::unique_ptr<Buffer<ScanCounts>> deviceCounts;
     std::vector<ScoringEvent> events;
     std::vector<Top> finalTop;
     std::vector<ScanCounts> counts;
+    bool deferred=false;
+    std::vector<MS2Scan*> resultOwners;
+    std::vector<std::vector<PendingResult>> pending;
+    Buffer<Scan> scanBuffer;
+    Buffer<PeptideInput> peptideBuffer;
+    Buffer<Result> resultBuffer;
+    Buffer<int> selectedBuffer, selectedCountBuffer;
+    Buffer<ScoringEvent> eventBuffer;
+    Buffer<unsigned char> selectionScratch;
+    void trimDeviceWorkspace() {
+        constexpr size_t limit=32u*1024u*1024u;
+        scanBuffer.trim(limit);peptideBuffer.trim(limit);resultBuffer.trim(limit);
+        selectedBuffer.trim(limit);selectedCountBuffer.trim(limit);eventBuffer.trim(limit);
+        selectionScratch.trim(limit);
+    }
 };
 std::unique_ptr<HostScoringWorkspace> hostScoringWorkspace;
 void resetBatchWorkspace() {
     hostScoringWorkspace.reset();
     peptideHostScratch.reset();
+    peptideInputs.reset();
     // Also clean up an interrupted preparation/assignment before the next dataset.
     preparedPeptides.reset();
     assignedBatch.reset();
@@ -539,7 +618,7 @@ struct PackedScoringBatch {
           sequenceIds(workspace.sequenceIds) {
         peptides.clear();
         initialTop.clear(); // resize below must zero entries unused by shorter Top lists.
-        sequenceIds.reset(objects.size());
+        if (!workspace.deviceTop) sequenceIds.reset(objects.size());
     }
     std::vector<Scan>& scans;
     std::vector<PeptideInput>& peptides;
@@ -557,7 +636,7 @@ struct PackedScoringBatch {
 
 PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
                                    const std::vector<Peptide *> &peptides,
-                                   const Config &config) {
+                                   const PeptideBatch& inputs, const Config &config) {
     PackedScoringBatch batch(scoringWorkspace(), peptides);
     batch.prepared = std::move(preparedPeptides);
     require(batch.prepared && batch.prepared->offsets.size() == peptides.size(),
@@ -582,19 +661,21 @@ PackedScoringBatch packScoringBatch(const std::vector<MS2Scan *> &scans,
         batch.assignment->candidates = std::make_unique<Buffer<Candidate>>(candidates);
     }
     for (size_t i = 0; i < peptides.size(); ++i)
-        batch.peptides.push_back({batch.prepared->offsets[i], batch.sequenceId(peptides[i]->sPeptide)});
+        batch.peptides.push_back({batch.prepared->offsets[i], batch.sequenceIds.get(inputs.sequence(i))});
     batch.spectra = &prepareScoringSpectra(scans, config);
     batch.scans = batch.spectra->scans;
-    batch.initialTop.resize(scans.size() * TopN);
-    for (size_t scanIndex = 0; scanIndex < scans.size(); ++scanIndex) {
-        auto& packed = batch.scans[scanIndex];
-        const auto& top = scans[scanIndex]->vpWeightSumTopPeptides;
-        packed.topCount = top.size();
-        require(packed.topCount <= TopN, "top list larger than original limit");
-        for (int rank = 0; rank < packed.topCount; ++rank) {
-            const auto* peptide = top[rank];
-            batch.initialTop[scanIndex * TopN + rank] = {
-                peptide->dScore, batch.sequenceId(peptide->sIdentifiedPeptide)};
+    if (!scoringWorkspace().deviceTop) {
+        batch.initialTop.resize(scans.size() * TopN);
+        for (size_t scanIndex = 0; scanIndex < scans.size(); ++scanIndex) {
+            auto& packed = batch.scans[scanIndex];
+            const auto& top = scans[scanIndex]->vpWeightSumTopPeptides;
+            packed.topCount = top.size();
+            require(packed.topCount <= TopN, "top list larger than original limit");
+            for (int rank = 0; rank < packed.topCount; ++rank) {
+                const auto* peptide = top[rank];
+                batch.initialTop[scanIndex * TopN + rank] = {
+                    peptide->dScore, batch.sequenceId(peptide->sIdentifiedPeptide)};
+            }
         }
     }
     return batch;
@@ -629,17 +710,29 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     ScoringOutput output(scoringWorkspace());
     const auto &candidates = *batch.assignment->candidates;
     const int size = candidates.n, scanCount = batch.scans.size();
-    Buffer<Scan> scans(batch.scans);
-    Buffer<PeptideInput> peptides(batch.peptides);
+    auto& workspace = scoringWorkspace();
+    struct TrimOnExit {
+        HostScoringWorkspace& workspace;
+        ~TrimOnExit(){workspace.trimDeviceWorkspace();}
+    } trim{workspace};
+    auto& scans=workspace.scanBuffer;scans.upload(batch.scans);
+    auto& peptides=workspace.peptideBuffer;peptides.upload(batch.peptides);
     const auto &texts = *batch.prepared->texts;
     SpectrumDeviceLease spectrumLease(*batch.spectra);
     const auto& peaks = *batch.spectra->devicePeaks;
     const auto& classes = *batch.spectra->deviceClasses;
     const auto& buckets = *batch.spectra->deviceBuckets;
     const auto& table = *batch.spectra->deviceTable;
-    Buffer<Top> initialTop(batch.initialTop), finalTop(batch.initialTop.size());
-    Buffer<Result> results(size);
-    Buffer<ScanCounts> counts(scanCount);
+    const bool reuseTop = bool(workspace.deviceTop);
+    if (!reuseTop) {
+        workspace.deviceTop = std::make_unique<Buffer<Top>>(batch.initialTop);
+        workspace.deviceCounts = std::make_unique<Buffer<ScanCounts>>(scanCount);
+    }
+    require(workspace.deviceTop->n == size_t(scanCount) * TopN &&
+            workspace.deviceCounts->n == size_t(scanCount), "Persistent Top scan layout changed");
+    auto& top = *workspace.deviceTop;
+    auto& counts = *workspace.deviceCounts;
+    auto& results=workspace.resultBuffer;results.resize(size);
     if (size) setCandidateRanges<<<(size + 127) / 128, 128>>>(scans.p, candidates.p, size);
     synced();
 #ifdef MVH_CUDA_ENABLE_RT
@@ -734,21 +827,22 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         scoreReference.reset();
     }
     scorePeptidesMVH<<<(scanCount + 127) / 128, 128>>>(scans.p, scanCount,
-        candidates.p, peptides.p, initialTop.p, finalTop.p, results.p, counts.p);
+        candidates.p, peptides.p, top.p, top.p, results.p, counts.p, reuseTop);
     synced();
-    Buffer<int> selected(size), selectedCount(1);
+    auto& selected=workspace.selectedBuffer;selected.resize(size);
+    auto& selectedCount=workspace.selectedCountBuffer;selectedCount.resize(1);
     int eventCount = size;
     if (size && !verification) {
         cub::CountingInputIterator<int> indices(0);
         size_t bytes=0;
         check(cub::DeviceSelect::If(nullptr, bytes, indices, selected.p,
-            selectedCount.p, size, KeepScoringEvent{results.p}));
-        Buffer<unsigned char> scratch(bytes);
+            selectedCount.p, size, KeepScoringEvent{results.p,candidates.p,peptides.p,top.p,counts.p,workspace.deferred}));
+        auto& scratch=workspace.selectionScratch;scratch.resize(bytes);
         check(cub::DeviceSelect::If(scratch.p, bytes, indices, selected.p,
-            selectedCount.p, size, KeepScoringEvent{results.p}));
+            selectedCount.p, size, KeepScoringEvent{results.p,candidates.p,peptides.p,top.p,counts.p,workspace.deferred}));
         check(cudaMemcpy(&eventCount, selectedCount.p, sizeof(int), cudaMemcpyDeviceToHost));
     }
-    Buffer<ScoringEvent> events(eventCount);
+    auto& events=workspace.eventBuffer;events.resize(eventCount);
     if (eventCount) {
         if (verification) {
             // CUB copies the counting iterator without a separate index kernel.
@@ -757,15 +851,15 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
             size_t bytes=0;
             check(cub::DeviceSelect::If(nullptr, bytes, indices, selected.p,
                 selectedCount.p, size, KeepEveryCandidate{}));
-            Buffer<unsigned char> scratch(bytes);
+            auto& scratch=workspace.selectionScratch;scratch.resize(bytes);
             check(cub::DeviceSelect::If(scratch.p, bytes, indices, selected.p,
                 selectedCount.p, size, KeepEveryCandidate{}));
         }
         gatherScoringEvents<<<(eventCount + 127) / 128, 128>>>(selected.p, eventCount,
-            candidates.p, results.p, events.p);
+            candidates.p, results.p, events.p,peptides.p,top.p,counts.p,workspace.deferred);
         synced();
     }
-    events.read(output.events); finalTop.read(output.finalTop); counts.read(output.counts);
+    events.read(output.events); top.read(output.finalTop); counts.read(output.counts);
     return output;
 }
 
@@ -773,6 +867,71 @@ struct ScoringCounts {
     unsigned long long calls=0, successes=0, predicted=0, matched=0;
     unsigned long long restoredMerges=0, restoredScores=0;
 };
+
+void updatePendingResults(const std::vector<MS2Scan*>& scans,const PackedScoringBatch& batch,
+                          const ScoringOutput& output,ScoringCounts& counts) {
+    auto& workspace=scoringWorkspace();
+    require(workspace.resultOwners==scans,"Deferred result dataset changed");
+    std::vector<PendingResult> next;
+    size_t eventIndex=0;
+    for(size_t scan=0;scan<scans.size();++scan) {
+        next.clear();next.resize(output.counts[scan].topCount);
+        auto& previous=workspace.pending[scan];
+        for(size_t rank=0;rank<next.size();++rank) {
+            const auto top=output.finalTop[scan*TopN+rank];
+            if(top.source<0) {
+                const size_t oldRank=size_t(-top.source-1);
+                require(oldRank<previous.size(),"Missing retained result metadata");
+                next[rank]=std::move(previous[oldRank]);
+            }
+        }
+        while(eventIndex<output.events.size() && output.events[eventIndex].candidate.scanId==int(scan)) {
+            const auto& event=output.events[eventIndex++];
+            if(event.topRank<0)continue;
+            require(size_t(event.topRank)<next.size(),"Invalid final Top event rank");
+            auto& result=next[event.topRank];
+            const auto* peptide=batch.peptideObjects[event.candidate.peptideId];
+            if(event.result.status==ResultAccepted) {
+                result.sequenceId=batch.peptides[event.candidate.peptideId].sequenceId;
+                result.score=event.result.score;
+                result.measuredMass=batch.assignment->precursors[event.candidate.precursorId].mass;
+                result.charge=event.candidate.charge;
+                result.calculatedMass=peptide->dPeptideMass;
+                result.length=peptideHostScratch ? peptideHostScratch->lengths[event.candidate.peptideId] : peptide->iPeptideLength;
+                result.identified=peptide->sPeptide;result.original=peptide->sOriginalPeptide;
+                result.proteins=peptide->sProteinName;result.neutral=peptide->sNeutralLossPeptide;
+                result.identifyPrefix=peptide->cIdentifyPrefix;result.identifySuffix=peptide->cIdentifySuffix;
+                result.originalPrefix=peptide->cOriginalPrefix;result.originalSuffix=peptide->cOriginalSuffix;
+                if(!verification)++counts.restoredScores;
+            } else {
+                require(result.sequenceId==batch.peptides[event.candidate.peptideId].sequenceId,
+                        "Protein merge preceded final acceptance");
+                // Preserve original mergePeptide's exact string matching, including
+                // its comma-prefix behavior; changing it would change PSM output.
+                const auto& name=peptide->sProteinName;
+                if(result.proteins!=name && result.proteins.find(","+name)==std::string::npos)
+                    result.proteins+=","+name;
+                if(!verification)++counts.restoredMerges;
+            }
+        }
+        for(size_t rank=0;rank<next.size();++rank) {
+            const auto& result=next[rank];const auto top=output.finalTop[scan*TopN+rank];
+            require(result.sequenceId==top.sequenceId && result.score==top.score,"Deferred Top metadata differs");
+            if(verification) {
+                const auto* ref=scans[scan]->vpWeightSumTopPeptides[rank];
+                require(result.identified==ref->sIdentifiedPeptide && result.original==ref->sOriginalPeptide &&
+                        result.proteins==ref->sProteinNames && result.neutral==ref->sPeptideForScoring &&
+                        result.measuredMass==ref->dMeasuredParentMass && result.charge==ref->iMeasuredParentCharge &&
+                        result.calculatedMass==ref->dCalculatedParentMass && result.length==ref->iPepLength &&
+                        result.identifyPrefix==ref->cIdentifyPrefix && result.identifySuffix==ref->cIdentifySuffix &&
+                        result.originalPrefix==ref->cOriginalPrefix && result.originalSuffix==ref->cOriginalSuffix,
+                        "Deferred result differs from immediate CPU restoration");
+            }
+        }
+        previous.swap(next);
+    }
+    require(eventIndex==output.events.size(),"Scoring events are not grouped by scan");
+}
 
 ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
                                    PackedScoringBatch &batch,
@@ -785,6 +944,7 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
     }
     std::vector<double> ions, forward, reverse;
     std::vector<char> sequence;
+    if (!scoringWorkspace().deferred || verification)
     for (const auto &event : output.events) {
         const auto &candidate = event.candidate;
         const auto &result = event.result;
@@ -811,6 +971,7 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
             scan->saveScore(result.score, entry, scan->vpWeightSumTopPeptides, "MVH", 2);
         }
     }
+    if (!scoringWorkspace().deferred || verification)
     for (size_t s = 0; s < scans.size(); ++s) {
         const auto &top = scans[s]->vpWeightSumTopPeptides;
         require(top.size() == size_t(output.counts[s].topCount), "GPU/CPU top count mismatch");
@@ -821,14 +982,59 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
         }
         scans[s]->vMassChargePeptidePtrTuples.clear();
     }
+    if (scoringWorkspace().deferred) updatePendingResults(scans,batch,output,counts);
+    for (auto* scan:scans) scan->vMassChargePeptidePtrTuples.clear();
+    // Keep only live Top keys; no dataset-wide dictionary of all generated peptides.
+    std::vector<int> retainedIds;
+    for (size_t s = 0; s < scans.size(); ++s)
+        for (int rank = 0; rank < output.counts[s].topCount; ++rank)
+            retainedIds.push_back(output.finalTop[s * TopN + rank].sequenceId);
+    batch.sequenceIds.retain(std::move(retainedIds));
     return counts;
 }
 } // namespace
 
-void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *> &peptides) {
+void beginSearchResults(const std::vector<MS2Scan*>& scans) {
+    auto& workspace=scoringWorkspace();
+    require(!workspace.deviceTop,"Search results must begin before scoring");
+    workspace.deferred=deferSearchResults;
+    if(!workspace.deferred)return;
+    for(const auto* scan:scans)require(scan->vpWeightSumTopPeptides.empty(),"Deferred search requires empty initial Top");
+    workspace.resultOwners=scans;workspace.pending.resize(scans.size());
+}
+void finishSearchResults(const std::vector<MS2Scan*>& scans) {
+    auto& workspace=scoringWorkspace();
+    if(!workspace.deferred)return;
+    require(workspace.resultOwners==scans,"Deferred result dataset changed at finalization");
+    size_t restored=0;
+    for(size_t i=0;i<scans.size();++i) {
+        auto& target=scans[i]->vpWeightSumTopPeptides;
+        for(auto* old:target)delete old;target.clear();
+        target.reserve(workspace.pending[i].size());
+        for(auto& row:workspace.pending[i]) {
+            auto result=std::make_unique<PeptideUnit>();
+            result->dMeasuredParentMass=row.measuredMass;result->iMeasuredParentCharge=row.charge;
+            result->dCalculatedParentMass=row.calculatedMass;result->dPepNeutralMass=row.calculatedMass;
+            result->dScore=row.score;result->vdScores[2]=row.score;result->iPepLength=row.length;
+            result->sIdentifiedPeptide=std::move(row.identified);result->sOriginalPeptide=std::move(row.original);
+            result->sProteinNames=std::move(row.proteins);result->sPeptideForScoring=std::move(row.neutral);
+            result->sScoringFunction="MVH";
+            result->cIdentifyPrefix=row.identifyPrefix;result->cIdentifySuffix=row.identifySuffix;
+            result->cOriginalPrefix=row.originalPrefix;result->cOriginalSuffix=row.originalSuffix;
+            target.push_back(result.release());++restored;
+        }
+    }
+    workspace.pending.clear();workspace.deferred=false;
+    std::cout<<"[CUDA final restoration] results="<<restored<<'\n';
+}
+
+void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const PeptideBatch& inputs,
+                      const std::vector<Peptide *> &peptides) {
     initialize();
     const Config config = configuration();
-    auto batch = packScoringBatch(scans, peptides, config);
+    if (!scoringWorkspace().deferred || verification) restorePeptideMetadata(inputs, peptides);
+    else require(inputs.size()==peptides.size(), "Peptide restoration size mismatch");
+    auto batch = packScoringBatch(scans, peptides, inputs, config);
     const auto output = executeScoringBatch(batch, config);
     if (scoreImpactEnabled) {
         require(bool(scoreImpactWriter), "score-impact output was not initialized");
@@ -849,6 +1055,7 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
               << " inrange=" << counts.predicted << " matched=" << counts.matched
               << " cached_ions=" << output.cachedIonCount
               << " cache_charge_stride=" << output.chargeStride
+              << " result_restoration=" << (scoringWorkspace().deferred ? "final" : "batch")
               << " downloaded_events=" << output.events.size()
               << " restored_merges=" << counts.restoredMerges
               << " restored_scores=" << counts.restoredScores
@@ -861,11 +1068,143 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const std::vector<Peptide *
               << " backend=" << matchBackend << " verified=" << verification << '\n';
 }
 
+void scorePeptidesMVH(std::vector<MS2Scan*>& scans, const std::vector<Peptide*>& peptides) {
+    require(bool(peptideInputs), "Peptide inputs missing before scoring");
+    scorePeptidesMVH(scans, *peptideInputs, peptides);
+}
+
 }
 
 namespace mvh_cuda {
 void runContractTests(){
     setVerification(true);initialize();
+    {
+        // A sequence is merged, evicted, then accepted again with a better score.
+        // Its earlier protein history must not leak into the surviving result.
+        resetBatchWorkspace();
+        auto scan=std::make_unique<MS2Scan>();std::vector<MS2Scan*> scans{scan.get()};
+        beginSearchResults(scans);
+        std::vector<std::unique_ptr<Peptide>> owned;
+        std::vector<Peptide*> objects;
+        std::vector<double> scores;
+        auto add=[&](const std::string& sequence,const std::string& protein,double score) {
+            auto p=std::make_unique<Peptide>();
+            p->setPeptide(sequence,sequence,protein,0,1000,'L','R','L','R');p->iPeptideLength=7;
+            objects.push_back(p.get());owned.push_back(std::move(p));scores.push_back(score);
+        };
+        add("[AAAAAAK]","old",1);add("[AAAAAAK]","old_merge",1);
+        for(int i=0;i<TopN;++i)add("[OTHER"+std::to_string(i)+"]","other",2+i);
+        add("[AAAAAAK]","new",100);add("[AAAAAAK]","new_merge",100);
+        PackedScoringBatch batch(scoringWorkspace(),objects);
+        batch.assignment=std::make_unique<AssignedBatch>();batch.assignment->precursors.push_back({1000,0,2});
+        std::vector<Candidate> candidates;std::vector<Result> results;
+        std::vector<int> indices;
+        for(size_t i=0;i<objects.size();++i) {
+            batch.peptides.push_back({0,batch.sequenceId(objects[i]->sPeptide)});
+            candidates.push_back({int(i),0,0,2});results.push_back({scores[i],ResultScored,10,5});indices.push_back(i);
+            if(!scan->mergePeptide(scan->vpWeightSumTopPeptides,objects[i]->sPeptide,objects[i]->sProteinName))
+                scan->saveScore(scores[i],std::make_tuple(1000.0,2,objects[i]),scan->vpWeightSumTopPeptides,"MVH",2);
+        }
+        Scan layout{};layout.candidates=candidates.size();
+        Buffer<Scan> ds(std::vector<Scan>{layout});Buffer<Candidate> dc(candidates);
+        Buffer<PeptideInput> dp(batch.peptides);Buffer<Result> dr(results);
+        Buffer<Top> top{std::vector<Top>(TopN)};Buffer<ScanCounts> stats(1);
+        scorePeptidesMVH<<<1,128>>>(ds.p,1,dc.p,dp.p,top.p,top.p,dr.p,stats.p);
+        Buffer<int> di(indices);Buffer<ScoringEvent> events(indices.size());
+        gatherScoringEvents<<<1,128>>>(di.p,indices.size(),dc.p,dr.p,events.p,dp.p,top.p,stats.p,true);
+        synced();
+        ScoringOutput output(scoringWorkspace());events.read(output.events);top.read(output.finalTop);stats.read(output.counts);
+        require(output.events[0].topRank<0 && output.events[1].topRank<0,
+                "Evicted protein history was retained");
+        ScoringCounts counters;updatePendingResults(scans,batch,output,counters);
+        finishSearchResults(scans);
+        require(scan->vpWeightSumTopPeptides[0]->sProteinNames=="new,new_merge",
+                "Final restoration retained evicted protein names");
+        resetBatchWorkspace();
+    }
+    {
+        // Expanded output is populated from compact input on the device, with
+        // original residue counts and one-byte neutral-loss replacement rules.
+        PeptideBatch input;
+        input.append(1, "[M~K]"); input.append(2, "[M*K]");
+        Buffer<char> original(input.texts()), expanded(16);
+        Buffer<uint64_t> originalOffsets(input.offsets());
+        Buffer<uint64_t> offsets(std::vector<uint64_t>{0,8});
+        Buffer<int> capacities(std::vector<int>{8,8}), lengths(2), errors(2);
+        std::vector<Rule> rules(2);
+        rules[0].fromLen=1; rules[0].from[0]='~';
+        rules[0].toLen=2; rules[0].to[0]='S'; rules[0].to[1]='T';
+        rules[1].fromLen=1; rules[1].from[0]='*'; rules[1].toLen=0;
+        Buffer<Rule> deviceRules(rules);
+        preprocessingMVH<<<1,128>>>(expanded.p, offsets.p, capacities.p, 2,
+            deviceRules.p, 2, lengths.p, errors.p, original.p, originalOffsets.p);
+        synced();
+        std::vector<char> output; std::vector<int> gotLengths, gotErrors;
+        expanded.read(output); lengths.read(gotLengths); errors.read(gotErrors);
+        require(std::string(output.data()) == "[MSTK]" &&
+                std::string(output.data()+8) == "[MK]", "Packed neutral-loss expansion differs");
+        require(gotLengths == std::vector<int>({2,2}) &&
+                gotErrors == std::vector<int>({0,0}), "Packed neutral-loss metadata differs");
+    }
+    // Persistent in-place Top/counts must match independently seeded batches,
+    // including full lists, equal scores, merges, skipped scans and no candidates.
+    {
+        std::vector<Top> expected(2 * TopN);
+        Buffer<Top> resident(expected);
+        Buffer<ScanCounts> residentCounts(2);
+        std::vector<ScanCounts> previous(2);
+        for (int batch = 0; batch < 5; ++batch) {
+            std::vector<Scan> layout(2);
+            layout[0].topCount = previous[0].topCount;
+            layout[1].skip = 1;
+            const int n = batch == 2 ? 0 : 120;
+            layout[0].candidates = n;
+            std::vector<Candidate> associations(n);
+            std::vector<PeptideInput> inputs(n);
+            std::vector<Result> scores(n);
+            for (int i = 0; i < n; ++i) {
+                associations[i] = {i, 0, 0, 2};
+                inputs[i] = {0, (i + batch * 17) % 140};
+                scores[i] = {double((i + batch * 11) % 30), ResultScored, 10, 5};
+            }
+            Buffer<Scan> ds(layout);
+            Buffer<Candidate> dc(associations);
+            Buffer<PeptideInput> dp(inputs);
+            Buffer<Result> dr(scores), referenceResults(scores);
+            Buffer<Top> seed(expected), referenceTop(expected);
+            Buffer<ScanCounts> referenceCounts(2);
+            scorePeptidesMVH<<<1,128>>>(ds.p, 2, dc.p, dp.p, seed.p,
+                referenceTop.p, referenceResults.p, referenceCounts.p);
+            // Ignore host topCount after initialization: counts must be resident.
+            if (batch) {
+                layout[0].topCount = 0;
+                check(cudaMemcpy(ds.p, layout.data(), layout.size()*sizeof(Scan), cudaMemcpyHostToDevice));
+            }
+            scorePeptidesMVH<<<1,128>>>(ds.p, 2, dc.p, dp.p, resident.p,
+                resident.p, dr.p, residentCounts.p, batch != 0);
+            synced();
+            std::vector<Top> actual;
+            std::vector<ScanCounts> actualCounts;
+            std::vector<Result> actualResults, expectedResults;
+            referenceTop.read(expected); resident.read(actual);
+            referenceCounts.read(previous); residentCounts.read(actualCounts);
+            dr.read(actualResults); referenceResults.read(expectedResults);
+            for (int j = 0; j < 2; ++j) {
+                const auto& a = actualCounts[j]; const auto& b = previous[j];
+                require(a.topCount == b.topCount && a.calls == b.calls &&
+                    a.successes == b.successes && a.predicted == b.predicted &&
+                    a.matched == b.matched && a.error == b.error, "Persistent Top counts differ");
+                for (int k = 0; k < a.topCount; ++k) {
+                    const int index = j * TopN + k;
+                    require(actual[index].sequenceId == expected[index].sequenceId &&
+                        actual[index].score == expected[index].score, "Persistent Top ordering differs");
+                }
+            }
+            for (int i = 0; i < n; ++i)
+                require(actualResults[i].status == expectedResults[i].status,
+                        "Persistent Top merge/accept decision differs");
+        }
+    }
     {
         std::map<double,char> data{{99.5,1},{100.0,2},{100.5,3},{101.0,1},{102.0,2}};
         PeakList list(&data);Scan s{};s.peaks=list.size();s.lowest=list.iLowestMass;s.highest=list.iHighestMass;
@@ -982,6 +1321,12 @@ void runContractTests(){
             scans.push_back(s);
         }
         preProcessAllMs2Mvh(scans);preprocessingMVH(peptides);scorePeptidesMVH(scans,peptides);
+        // A pointer-free empty input must leave every retained Top unchanged.
+        PeptideBatch empty;
+        const std::vector<Peptide*> noObjects;
+        preprocessingMVH(empty);
+        scorePeptidesMVH(scans, empty, noObjects);
+
         for(auto *s:scans)delete s;for(auto*p:peptides)delete p;MVH::destroyLnTable();
     }
     useIonCache=true;

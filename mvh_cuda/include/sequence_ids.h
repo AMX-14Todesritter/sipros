@@ -8,7 +8,8 @@
 #include <vector>
 
 namespace mvh_cuda {
-// IDs follow first appearance. Owned text remains valid even when restoration
+// Fresh IDs follow first appearance; retain() preserves live IDs across batches.
+// Owned text remains valid even when restoration
 // replaces top-candidate strings; offsets survive growth of the text buffer.
 class BatchSequenceIds {
 public:
@@ -28,22 +29,30 @@ public:
         std::fill(slots_.begin(), slots_.end(), -1);
         entries_.clear();
         text_.clear();
+        idToEntry_.clear();
+        nextId_ = 0;
         entries_.reserve(expectedCount);
+        idToEntry_.reserve(expectedCount);
     }
 
     int get(std::string_view sequence) {
         const auto hash = std::hash<std::string_view>{}(sequence);
         auto slot = findSlot(sequence, hash);
-        if (slots_[slot] >= 0) return slots_[slot];
+        if (slots_[slot] >= 0) return entries_[slots_[slot]].id;
         if (entries_.size() >= std::size_t(std::numeric_limits<int>::max()))
             throw std::runtime_error("Too many distinct peptide sequences in one batch");
         if (entries_.size() == slots_.size() / 2) {
             grow();
             slot = findSlot(sequence, hash);
         }
-        const int id = static_cast<int>(entries_.size());
+        while (nextId_ < idToEntry_.size() && idToEntry_[nextId_] >= 0) ++nextId_;
+        if (nextId_ >= std::size_t(std::numeric_limits<int>::max()))
+            throw std::length_error("Sequence ID capacity exceeded");
+        const int id = static_cast<int>(nextId_);
+        if (nextId_ == idToEntry_.size()) idToEntry_.push_back(-1);
+        const int entryIndex = static_cast<int>(entries_.size());
         const auto offset = text_.size();
-        entries_.push_back({hash, offset, sequence.size()});
+        entries_.push_back({hash, offset, sequence.size(), id});
         try {
             // No terminator is needed: comparisons always use the stored length.
             if (!sequence.empty())
@@ -52,13 +61,52 @@ public:
             entries_.pop_back();
             throw;
         }
-        slots_[slot] = id;
+        slots_[slot] = entryIndex;
+        idToEntry_[id] = entryIndex;
+        ++nextId_;
         return id;
     }
+
+    // Keep IDs stable for every sequence still referenced by a GPU Top list.
+    // Dead IDs can be reused only after all scans have completed the batch.
+    void retain(std::vector<int> ids) {
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        std::vector<Entry> kept;
+        std::vector<char> text;
+        kept.reserve(ids.size());
+        for (int id : ids) {
+            if (id < 0 || std::size_t(id) >= idToEntry_.size() || idToEntry_[id] < 0)
+                throw std::out_of_range("Retaining unknown sequence ID");
+            auto entry = entries_[idToEntry_[id]];
+            const auto offset = text.size();
+            if (entry.length)
+                text.insert(text.end(), text_.begin() + entry.offset,
+                            text_.begin() + entry.offset + entry.length);
+            entry.offset = offset;
+            kept.push_back(entry);
+        }
+        // Preserve the high-water capacities for the next batch.
+        entries_.assign(kept.begin(), kept.end());
+        text_.assign(text.begin(), text.end());
+        std::fill(slots_.begin(), slots_.end(), -1);
+        std::fill(idToEntry_.begin(), idToEntry_.end(), -1);
+        for (std::size_t i = 0; i < entries_.size(); ++i) {
+            const auto& entry = entries_[i];
+            auto slot = entry.hash & (slots_.size() - 1);
+            while (slots_[slot] >= 0) slot = (slot + 1) & (slots_.size() - 1);
+            slots_[slot] = static_cast<int>(i);
+            idToEntry_[entry.id] = static_cast<int>(i);
+        }
+        nextId_ = 0;
+    }
+
+    std::size_t size() const { return entries_.size(); }
 
 private:
     struct Entry {
         std::size_t hash, offset, length;
+        int id;
     };
 
     std::size_t findSlot(std::string_view sequence, std::size_t hash) const {
@@ -91,5 +139,7 @@ private:
     std::vector<int> slots_;
     std::vector<Entry> entries_;
     std::vector<char> text_;
+    std::vector<int> idToEntry_;
+    std::size_t nextId_ = 0;
 };
 }

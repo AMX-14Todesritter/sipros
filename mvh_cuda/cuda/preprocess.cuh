@@ -53,9 +53,16 @@ __global__ void sumIntensity(const RawScan *scans,int n,const double *intensity,
     out[s].sum=sum;out[s].max=maximum;
 }
 __global__ void preprocessingMVH(char *texts,const uint64_t *offsets,const int *capacities,int n,
-                                const Rule *rules,int ruleCount,int *lengths,int *errors){
+                                const Rule *rules,int ruleCount,int *lengths,int *errors,
+                                const char* original,const uint64_t* originalOffsets){
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=n)return;
-    char *text=texts+offsets[i];int len=0,residues=0;while(text[len]){if(alpha(text[len]))++residues;++len;}
+    char *text=texts+offsets[i];
+    if (original) {
+        const uint64_t bytes = originalOffsets[i+1] - originalOffsets[i];
+        if (bytes > uint64_t(capacities[i])) { lengths[i]=0; errors[i]=2; return; }
+        for (uint64_t k=0;k<bytes;++k) text[k]=original[originalOffsets[i]+k];
+    }
+    int len=0,residues=0;while(text[len]){if(alpha(text[len]))++residues;++len;}
     lengths[i]=residues;errors[i]=0;
     for(int r=0;r<ruleCount;++r){const Rule &rule=rules[r];int pos=0,iterations=0;
         while(pos+rule.fromLen<=len){bool found=true;

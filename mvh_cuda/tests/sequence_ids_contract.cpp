@@ -70,5 +70,35 @@ int main() {
             require(growing.get(key) == inserted.first->second);
         }
     }
+    // A live sequence keeps its ID across batches, while dead keys/IDs are
+    // reclaimed. Include sparse IDs, binary strings, growth and empty Top.
+    mvh_cuda::BatchSequenceIds persistent(0);
+    std::unordered_map<std::string, int> live;
+    for (int batch = 0; batch < 100; ++batch) {
+        for (const auto& item : live) require(persistent.get(item.first) == item.second);
+        auto current = live;
+        for (int i = 0; i < 200; ++i) {
+            const auto key = std::string("A\0", 2) + std::to_string(random() % 2000);
+            const int id = persistent.get(key);
+            auto inserted = current.emplace(key, id);
+            require(inserted.first->second == id);
+        }
+        std::vector<int> keep;
+        live.clear();
+        std::unordered_map<int, std::string> unique;
+        for (const auto& item : current) {
+            require(unique.emplace(item.second, item.first).second);
+            if (random() % 5 == 0) {
+                live.insert(item);
+                keep.push_back(item.second);
+                keep.push_back(item.second); // Several scans may retain one sequence.
+            }
+        }
+        persistent.retain(keep);
+        require(persistent.size() == live.size());
+    }
+    persistent.retain({});
+    require(persistent.size() == 0);
+    require(persistent.get("new dataset") == 0);
     std::cout << "PASS: owned keys, duplicates, first-seen IDs, rehash and independent batches\n";
 }

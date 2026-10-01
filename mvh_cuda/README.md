@@ -4,7 +4,7 @@
 
 在现有 `mvh_cuda/` 内直接演进的 GPU 实现。CPU 参考实现位于 `mvh/`，原始依赖及 CPU 校验函数位于 `original/`。本轮没有另建或保留一个 CUDA baseline 分支/副本。旧实验记录仍是历史记录，不代表当前代码。
 
-当前不是“整个程序都运行在 GPU”：CPU 负责配置、文件读取、FASTA 酶切/PTM 枚举、原始质量估计、对数阶乘表和最终对象/文件输出；GPU 负责谱峰预处理、候选质量查询与关联、肽段中性丢失预处理、理论峰生成、峰匹配、评分与 top 决策。
+当前不是“整个程序都运行在 GPU”：CPU 负责配置、文件读取、基础前体质量的最终浮点评估、对数阶乘表和结果对象/文件输出；默认 GPU 负责酶切、原子计数、PTM 枚举及质量偏移累加，以及谱峰预处理、候选质量查询与关联、肽段中性丢失预处理、理论峰生成、峰匹配、评分与 top 决策。`--peptide-generation cpu` 保留原肽生成路径供对照。
 
 ## 从入口读到子函数
 
@@ -13,8 +13,9 @@ app/main.cpp → mvh_app::run()
 ├─ loadMassData()                         CPU：文件与 precursor 索引
 ├─ preProcessAllMs2Mvh()                  GPU：实验峰预处理
 └─ searchDatabaseMvh()                    原母函数名称保留
-   ├─ ProteinDatabase::getNextPeptide()   CPU：酶切、PTM、肽段质量
+   ├─ SearchPeptideGenerator            GPU：酶切、原子计数、PTM；CPU：读取/基础质量浮点评估
    └─ processPeptideArrayMvh()            按生成的肽段分批
+      ├─ packPeptideBatch()               CPU：一次生成连续质量/文本/偏移数组
       ├─ assignPeptides2Scans()           GPU 批量分配
       │  └─ GetAllRangeFromMass()
       │     └─ GetRangeFromMass()
@@ -28,7 +29,8 @@ app/main.cpp → mvh_app::run()
          │  │  └─ lnCombin()
          │  ├─ scorePeptidesMVH()        GPU：按原顺序合并及保留 top
          │  └─ gatherScoringEvents()     GPU：只收集合并/入选事件
-         └─ restoreScoringResults()      CPU：原 mergePeptide()/saveScore()
+         └─ restoreScoringResults()      CPU：仅保留最终 Top 的紧凑元数据
+   └─ finishSearchResults()             CPU：搜索结束统一创建结果对象
 ```
 
 为了批量调用 GPU，`assignPeptides2Scans()` 参数由单个肽段改为一批肽段，调用位置移入 `processPeptideArrayMvh()`。原 CPU `GetRangeFromMass()` / `GetAllRangeFromMass()` 方法仍保留供对照，生产 CUDA 路径调用 `assignment.cuh` 内的同名设备函数。没有为每个肽段启动一次 kernel。
@@ -50,13 +52,13 @@ app/main.cpp → mvh_app::run()
 
 ## 这轮的数据组织
 
-1. CPU 依原顺序生成一批肽段，将质量数组上传。
+1. 肽生成器依原顺序交付一批肽段（默认 CUDA，CPU 模式供对照），一次性打包为 `PeptideBatch` 的质量、连续文本和偏移数组；同一批输入供关联、预处理和评分使用。
 2. GPU 查询排序好的 precursor 表，使用计数和前缀和分配连续候选空间。
 3. GPU 用 **稳定 radix sort** 按 scan 分组。每个 scan 内的肽段、窗口和 precursor 遍历顺序不变；不会去重多个 precursor 假设。
 4. GPU 中性丢失后的文本保留在显存；正常模式不下载再上传。
 5. 理论峰按 `(批内肽段对象 ID, charge)` 缓存，使用原来的 `CalculateSequenceIons()` 数值路径。不同对象即使序列相同，也暂不跨对象合并缓存；避免引入字符串去重和蛋白归属变化。
 6. 每个候选由一个 GPU 线程评分。部分后来会被 merge 跳过的候选会被提前计算，但其结果不会进入原算法的逻辑统计或 top 更新。
-7. 每个 scan 按原顺序应用 merge 与 top 50 更新。正常模式仅下载会合并蛋白名称或进入 top 的事件，CPU 用原函数恢复结果对象。
+7. 每个 scan 按原顺序应用 merge 与 top 50 更新。默认仅下载与本批最终 Top 有关的入选/合并事件，CPU 保存紧凑元数据，在搜索结束时统一恢复结果对象；逐批恢复模式保留作对照。
 
 默认缓存 charge 0..8 的索引槽（0 电荷仍按原规则判无效）；更高电荷使用同一个公式直接在 GPU 计算，不截断、不回退 CPU。缓存槽数或显存预算不足时，整个批次使用直接 GPU 评分。缓存是可选的性能路径，不改变输出规则。
 
@@ -141,17 +143,23 @@ still updates its candidate ranges and current top list.
   does not. The scoring log records `spectrum_device_bytes` and `spectrum_cache`.
 
 Both modes retain fixed host arrays for the dataset; they are reset before scan
-preprocessing and at the end of the search scope. Candidate/top metadata remains
-batch-local. The sphere geometry, tracing policy and scoring formula are unchanged.
+preprocessing and at the end of the search scope. Candidate metadata remains
+batch-local; Top entries and their counts stay on the GPU between batches, even
+with `--spectrum-cache host`. The sphere geometry, tracing policy and scoring
+formula are unchanged.
 
 `BatchSequenceIds` in `include/sequence_ids.h` uses contiguous ID slots,
 first-seen entries and owned key bytes. Linear probing with at most 50% occupancy
 replaces per-key hash nodes; stored hashes avoid rehashing strings during growth.
 Offsets keep keys valid when the byte buffer grows. Exact length/byte comparison
 preserves duplicate handling, including when result restoration replaces a
-source top-candidate string. IDs restart each batch, while `reset()` keeps slot,
-entry and byte capacity. Unique keys are still copied once, and growing the byte
-buffer may copy existing bytes. Stable IDs and GPU Top reuse remain follow-up work.
+source top-candidate string. After restoration, `retain()` keeps only sequences
+referenced by the final Top lists. Their IDs stay stable across batches; IDs with
+no remaining Top references are recycled. This bounds the dictionary by live Top
+keys plus the current batch instead of all peptides ever generated. `reset()`
+restarts IDs for a new dataset while preserving capacity when called explicitly.
+Unique new keys still require hashing and copying, and retained keys are compacted
+on the CPU after each batch.
 
 A dataset-scoped host workspace reuses scoring input, initial/final Top, event and
 count arrays, plus peptide preprocessing text/rule/length/error scratch. Peptide
@@ -160,14 +168,114 @@ copying the pointer array; preprocessing writes offsets directly into the prepar
 batch. Dataset preprocessing/reset and search-scope exit release the workspace.
 This retains host memory at the largest capacity reached during the dataset and
 can increase peak RSS when later stages allocate; it is not a memory-reduction
-claim. Device buffers and peptide objects still follow their prior lifetimes.
+claim. Step 4 also reuses bounded device workspace capacity; peptide objects still
+follow their prior lifetimes.
 The workspace is for serial batches; a future pipeline needs separate workspaces
 for concurrently active batches.
+
+Top reuse is shared by CUDA and RT-custom. The first scoring batch seeds a single
+device Top buffer from the host; later batches read/update that buffer in place
+and get their initial Top counts from persistent device counters. Each scan owns
+its slice, preserving the original candidate order and equal-score sorting.
+Dataset reset releases both buffers. This removes repeated initial-Top packing, upload and allocation. Top entries/counts
+are still downloaded for ID retention and metadata maintenance. Step 4 defers
+result-object creation to search completion and filters events to surviving Top
+entries. Verification and `--result-restoration batch` retain the original CPU
+`mergePeptide()`/`saveScore()` replay as an independent reference.
+
+Validation for GPU Top reuse: all 15 CTest tests pass, including synthetic full
+Top/tie/replacement/empty-batch cases, randomized live-ID retention, dataset reset,
+and CUDA/RT-custom repeated-protein searches with one batch versus batches of 3
+in both normal and verified modes. No Marine performance gain is claimed without
+a fresh before/after benchmark.
 
 Rebuild `build/mvh_rt/gpu_integration` before running the normal benchmark scripts.
 Old `packing_optimized` and `profile_enabled` binaries may still contain profiling;
 they are historical artifacts, not builds of the current clean source. Both spectrum
 cache modes remain available through `--spectrum-cache host|device`.
+
+## 连续肽输入（第 2 步）
+
+`include/peptide_batch.h` 定义拥有数据的 `PeptideBatch`，包含连续的质量数组、
+以 NUL 结尾的序列文本及带末尾哨兵的偏移数组。数组下标就是批内肽 ID，重复肽
+保留独立条目和原始枚举顺序。`clear()` 复用容量，数据集重置释放工作区。
+
+生产路径在 `processPeptideArrayMvh()` 中调用一次 `packPeptideBatch()`。
+候选关联和中性丢失预处理接收 `const PeptideBatch&`，不再从 `Peptide*` 逐个提取
+质量或复制字符串。评分输入的序列 ID 也从连续文本生成。无需展开时，GPU 在
+上传的紧凑文本上直接处理；规则需要更大容量时，GPU 从紧凑输入复制到展开空间，
+避免 CPU 构建含空白容量的文本数组。展开路径需要临时 GPU 输入文本和偏移缓冲。
+
+第 2 步引入连续输入时保留了 CPU 肽生成；第 3 步将默认生成计算迁到 GPU（见下文）。
+结果对象仍保留，尚未消除 `new Peptide/delete`。对象只用于
+输入转换、原有合成测试的关联适配、CPU 校验和结果恢复；预处理后的长度和校验用
+文本在恢复边界写回对象。关联、匹配公式、候选顺序及蛋白归属规则保持不变。
+后续 GPU 肽生成可以基于这一数组接口继续演进。主机输入数组保留最大容量，
+因此本轮不宣称峰值内存下降或 Marine 已提速。
+
+验证覆盖连续数据所有权、容量复用、变长/重复/空序列、空批次保持 Top、GPU
+中性丢失展开与删除，以及现有 CUDA/RT-custom 多批次结果对照。
+本阶段容器 Release 构建完成，16/16 CTest 通过；CUDA contract 的
+Compute Sanitizer memcheck 报告 0 errors。
+
+## GPU 肽生成（第 3 步）
+
+Regular 搜索默认使用 `--peptide-generation cuda`，与 `--match-backend` 独立，
+因此 CUDA 和 RT-custom 评分均可使用。`--peptide-generation cpu` 运行原始
+`ProteinDatabase`，用于回退和性能/正确性对照；运行摘要记录所选生成后端。
+
+- CPU 流式加载/清理 FASTA，每块最多 256 条蛋白，达到约 1 MiB 序列后换块
+  （单条蛋白可能超过该阈值）。GPU 处理起始 M 移除、酶切位点、漏切组合及长度过滤。
+- GPU 统计每条基础肽的原子组成和 PTM 组合数量。CPU 对计数做前缀和并检查溢出，
+  按每页最多 65,536 条生成结果分配空间，不一次展开整个数据库的修饰组合。
+- GPU 按原始顺序生成：蛋白顺序、漏切数、酶切起点、原肽、PTM 数量、位点组合、
+  修饰类型排列；同一组合中第一个位点的修饰类型变化最快，质量偏移从末位向前累加。
+  末端修饰、每位点多种修饰和重复肽均保留。
+- 为保持现有 CPU `-ffast-math` 下的质量窗口语义，基础前体质量的最终浮点评估仍在
+  `src/generation_mass.cpp` 的 CPU 兼容层执行，输入是 GPU 计算的六种原子计数。
+  它没有再次遍历肽序列；PTM 质量累加在 GPU 执行。本阶段尚非完全 GPU 常驻生成。
+- CPU 将下载的生成页转换成现有结果对象，再进入第 2 步的连续输入路径。
+  这保留了结果恢复兼容性，也仍有下载、对象创建和重新打包成本；尚不宣称搜索提速。
+
+CUDA 生成的配置长度上限为 128，与当前评分残基容量一致；计数使用 64 位整数，
+PTM 组合计数溢出会明确报错。未新增 Mutation/SIP 搜索支持。
+
+`--verify-cuda` 在 CUDA 生成模式下，额外逐条调用未经修改的 CPU 生成器，精确比较
+序列、原肽、质量、蛋白名称、位置及侧翼残基，最后检查总条数相同。
+生成对照覆盖跨蛋白块、跨页、多类型/末端 PTM、零 PTM、漏切和起始 M 规则、
+不同同位素元素、128 残基边界及计数溢出。实际 Ecoli 数据库的 **3,956,849** 条
+肽已全部通过精确 CPU 对照（`experiments/Regular.cfg`）。
+
+## 最终结果恢复与有界工作区（第 4 步）
+
+默认 `--result-restoration final`，CUDA 和 RT-custom 共用此路径。每个 GPU Top
+条目记录来源：本批入选候选索引，或前一批 Top 的名次。评分后，仅保留最终入选
+事件，以及该次入选之后发生的蛋白归属合并事件；本批已被淘汰候选的事件不再下载。
+若同一序列被淘汰后再次入选，旧蛋白合并历史不会混入新结果。
+
+CPU 每张谱图最多保存 TopN 条紧凑元数据，按 GPU 返回的名次更新，不再逐批创建、
+排序、删除 `PeptideUnit`。蛋白名称合并刻意保留原函数的字符串匹配语义。
+`finishSearchResults()` 在搜索结束、输出前统一构建结果对象；不缓存整个搜索的
+全部事件历史。生成用的 `Peptide` 对象以及每批 CPU 元数据维护仍然存在，尚非
+完全 GPU 常驻搜索。
+
+`--result-restoration batch` 保留旧逐批恢复路径，便于直接对照。
+`--verify-cuda` 在 final 模式中同时运行旧路径，并逐批核对最终 Top 的序列、
+分数、蛋白名、质量、电荷、长度和侧翼信息。回归测试包含合并→淘汰→重新入选。
+
+扫描描述、肽描述、评分结果、选择索引、选择计数、事件和 CUB 选择临时空间使用
+可复用设备缓冲区。每个缓冲区超过 **32 MiB** 时，在评分结束后释放，避免大块
+评分存储常驻而挤占下一批关联阶段的显存。这七个工作缓冲的跨批保留上界为
+224 MiB，不包括已有的 Top、谱图缓存和 RT GAS；数据集重置统一释放工作区。
+理论离子缓存和候选关联等其他临时存储仍按原生命周期管理。
+
+验证：17/17 CTest 通过；CUDA contract 和正常 final 模式多批次搜索的
+Compute Sanitizer memcheck 均为 0 errors。实际 Ecoli 使用 batch=250,000，
+共 16 批，CUDA 与 RT-custom 各自的 batch/final 恢复输出 SHA-256 完全一致，
+每份输出 1,403,362 条 PSM。记录见
+[恢复方式对照](../output/validation/deferred_results_ecoli_20261001T185301Z.json)。
+该记录为单轮正确性对照，耗时不作为正式性能结论；尚未进行 Marine 对照。
+
 
 ## Peak selection: nearest mass
 

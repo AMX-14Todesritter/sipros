@@ -8,9 +8,25 @@ namespace mvh_cuda {
 constexpr int MaxClasses=8, MaxLength=128, MaxText=512, TopN=50;
 inline void check(cudaError_t e) { if(e!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(e)); }
 template<class T> struct Buffer {
-    T *p=nullptr; size_t n=0;
-    explicit Buffer(size_t count):n(count){if(n) check(cudaMalloc(&p,n*sizeof(T)));}
+    T *p=nullptr; size_t n=0, capacity=0;
+    explicit Buffer(size_t count=0){resize(count);}
     explicit Buffer(const std::vector<T>&v):Buffer(v.size()){if(n) check(cudaMemcpy(p,v.data(),n*sizeof(T),cudaMemcpyHostToDevice));}
+    void resize(size_t count) {
+        if(count>size_t(-1)/sizeof(T))throw std::length_error("CUDA buffer size overflow");
+        if(count>capacity) {
+            if(p)check(cudaFree(p));p=nullptr;n=0;capacity=0;
+            if(count)check(cudaMalloc(&p,count*sizeof(T)));
+            capacity=count;
+        }
+        n=count;
+    }
+    void upload(const std::vector<T>& values) {
+        resize(values.size());
+        if(n)check(cudaMemcpy(p,values.data(),n*sizeof(T),cudaMemcpyHostToDevice));
+    }
+    void trim(size_t maxBytes) {
+        if(capacity>maxBytes/sizeof(T)) { if(p)cudaFree(p);p=nullptr;n=0;capacity=0; }
+    }
     Buffer(const Buffer&)=delete; Buffer&operator=(const Buffer&)=delete;
     ~Buffer(){if(p)cudaFree(p);}
     void read(std::vector<T>&v){v.resize(n);if(n)check(cudaMemcpy(v.data(),p,n*sizeof(T),cudaMemcpyDeviceToHost));}
@@ -43,8 +59,9 @@ struct ScanCounts {
 // Explicit names keep host restoration and device decisions in agreement.
 enum ResultStatus { ResultSkipped = 0, ResultMerged = 1, ResultInsufficient = 2, ResultScored = 3, ResultAccepted = 4 };
 struct Result { double score; int status,predicted,matched; }; // 1 merged, 2 insufficient, 3 scored; negative error
-struct ScoringEvent { Candidate candidate; Result result; };
-struct Top { double score; int sequenceId; };
+struct ScoringEvent { Candidate candidate; Result result; int candidateIndex, topRank; };
+// source >= 0: accepted candidate index in this batch; source < 0: -(old rank+1).
+struct Top { double score; int sequenceId; int source=-1; };
 struct Rule { int fromLen,toLen; char from[MaxText],to[MaxText]; };
 __device__ inline bool alpha(char c){return (c>='A'&&c<='Z')||(c>='a'&&c<='z');}
 }

@@ -23,7 +23,7 @@ MATCHING_RULES = {
     'cuda': 'double nearest-mass bucket reference',
     'rt-triangle': 'legacy float triangle nearest-mass search',
     'rt-instanced': 'legacy float instanced-triangle nearest-mass search',
-    'rt-custom': 'built-in spheres at (mz, raw class, 0); descending-class closest-hit',
+    'rt-custom': 'built-in split-mz spheres; nearest-mass closest-hit',
 }
 
 

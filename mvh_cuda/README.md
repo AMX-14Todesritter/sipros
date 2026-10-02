@@ -284,31 +284,23 @@ build directory after source changes. Normal benchmark scripts still select
 `gpu_integration`, so rebuild that directory before using them for the optimized
 version. Keep baseline and optimized measurements identified by binary hash.
 
-## Peak selection: positive class priority
+## Peak selection: nearest mass
 
-The default CUDA bucket matcher now uses the same rule as the modified CPU
-`PeakList::findNear`: first require `abs(peakMz - queryMz) < tolerance` and
-`class > 0`, then prefer the larger class number, breaking equal-class ties by
-smaller distance. Exact class/distance ties retain the first encountered peak.
-Class 0 is excluded from candidate selection; no hit contributes to MVH's
-unmatched bin. Raw class numbers are not remapped (class 1 remains the strongest
-intensity group assigned by preprocessing).
+CPU/CUDA matching now follows `rtMVH_v0.0`: choose the nearest mass strictly
+within tolerance, independent of class; an exact distance tie keeps the first
+encountered peak. A selected class-0 peak is unscored.
+RT-custom uses equal-radius spheres at `(floor(mz), mz-floor(mz), 0)` and rays
+along negative Z. Boundary copies preserve queries across integer columns;
+primitive indices map back to the original experimental peaks. Float sphere
+intersection can still differ at boundaries or exact ties from double matching.
+See [sphere matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).
 
-This changes peak selection from the historical nearest-mass baseline. Existing
-benchmark PSM hashes describe their original binaries, not the new rule. The
-CPU verifier in `original/src/ms2scan.cpp` is synchronized with `mvh/`; source
-identity tests permit only this matcher to differ from upstream. All other
-upstream methods and the MVH scoring formula remain checked.
-
-The triangle and sphere tracing implementations are not changed by this matcher
-update. Sphere still uses float geometric intersection, so boundary agreement
-with the double-precision CPU/CUDA rule must be validated separately.
-
-A separate verified build for this change is `build/mvh_rt/class_priority`.
+Historical Marine 10M reports from commit `82522a4` used class-priority geometry
+and do not measure this corrected implementation. Rebuild before new profiling.
 
 ## Profiling integration of GPU workflow changes
 
-The profiling branch retains its existing peak-selection behavior and NVTX ranges.
+The profiling branch uses the same nearest-mass matching as `rtMVH_v0.0` and retains NVTX ranges.
 Continuous input packing, block-based GPU peptide generation and final result
 restoration now also have NVTX ranges; there is no per-peptide NVTX annotation.
 Build `build/mvh_rt/profile_enabled` with `MVH_ENABLE_PROFILING=ON` and

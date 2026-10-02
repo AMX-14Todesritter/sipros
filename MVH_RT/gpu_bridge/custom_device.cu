@@ -15,15 +15,14 @@ struct SearchRay {
     float tmax;
 };
 
-// Design point 1: change ray placement here. The baseline keeps raw class as
-// sphere height and starts above all classes, including any class-0 geometry.
+// Split the query using double subtraction before converting the fraction.
 __device__ SearchRay makeSearchRay(double mz) {
-    return {make_float3(static_cast<float>(mz), params.rayOriginY, 0.0f),
-            make_float3(0.0f, -1.0f, 0.0f), 0.0f, params.rayTmax};
+    const double integer = floor(mz);
+    return {make_float3(float(integer), float(mz - integer), 0.5f),
+            make_float3(0.0f, 0.0f, -1.0f), 0.0f, params.rayTmax};
 }
 
-// Design point 2: trace policy. Closest-hit selects the closest sphere entry;
-// no first-hit termination, custom double refinement, or fallback search.
+// Equal-radius spheres: earliest entry chooses the nearest fractional coordinate.
 __device__ unsigned tracePeak(OptixTraversableHandle handle, double mz) {
     if (!handle) return NoPeak;
     const auto ray = makeSearchRay(mz);
@@ -63,7 +62,10 @@ struct SphereCounter : mvh_cuda::IonCounter {
 // Design point 4: hit payload. Intersection itself is the built-in OptiX
 // sphere module registered in rt_support.cpp; there is no custom IS here.
 extern "C" __global__ void __closesthit__record() {
-    optixSetPayload_0(optixGetPrimitiveIndex());
+    const int scanId = params.candidates[optixGetLaunchIndex().x].scanId;
+    const auto offset = params.scans[scanId].peakOffset;
+    const auto primitive = params.sphereOffsets[offset] + optixGetPrimitiveIndex();
+    optixSetPayload_0(params.spherePeakIndices[primitive] - unsigned(offset));
 }
 
 extern "C" __global__ void __miss__background() {

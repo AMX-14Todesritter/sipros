@@ -1,4 +1,4 @@
-"""Verify upstream identity except the documented class-priority peak matcher."""
+"""Verify upstream identity except the documented nearest-mass peak matcher."""
 import hashlib
 import json
 import subprocess
@@ -21,7 +21,7 @@ for name, sha in manifest['files'].items():
                                         'show', manifest['source_commit']+':'+name])
     assert hashlib.sha256(original).hexdigest() == sha, name
     if name == 'src/ms2scan.cpp':
-        # Only the class-priority matcher intentionally differs from upstream.
+        # Only the nearest-mass matcher intentionally differs from upstream.
         current_text, original_text = data.decode(), original.decode()
         current_matcher = methods(current_text, 'PeakList')['findNear']
         original_matcher = methods(original_text, 'PeakList')['findNear']

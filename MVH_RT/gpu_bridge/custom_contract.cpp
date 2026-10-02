@@ -27,17 +27,21 @@ void checkQueries(double tolerance, int classCount) {
         {"positive interior", {q}, {1}, q + tolerance * 0.5, 1},
         {"negative interior", {q}, {2}, q - tolerance * 0.5, 2},
         {"clearly outside", {q}, {3}, q + tolerance * 1.5, 0},
-        {"class priority over exact mass", {q, q + tolerance * 0.75}, {1, 3}, q, 3},
+        {"nearest mass over class", {q, q + tolerance * 0.75}, {1, 3}, q, 1},
         {"outside higher class", {q, q + tolerance * 1.5}, {2, 3}, q, 2},
-        {"identical masses in different classes", {q, q, q}, {1, 2, 3}, q, 3},
+        {"distinct nearby masses", {q, q + tolerance * 0.25, q + tolerance * 0.5}, {1, 2, 3}, q, 1},
         {"class zero is unscored", {q}, {0}, q, 0},
-        {"positive class above zero", {q, q + tolerance * 0.5}, {0, 1}, q, 1},
+        {"nearest zero class", {q, q + tolerance * 0.5}, {0, 1}, q, 0},
         {"same class candidates", {q - tolerance * 0.5, q}, {2, 2}, q, 2},
         {"large mass", {8192.0}, {2}, 8192.0, 2},
         {"zero mass", {0.0}, {1}, 0.0, 1},
+        {"upper integer copy", {100.0 - tolerance * 0.25}, {2}, 100.0 + tolerance * 0.25, 2},
+        {"lower integer copy", {100.0 + tolerance * 0.25}, {3}, 100.0 - tolerance * 0.25, 3},
+        {"large mass fractional precision", {8192.123456}, {2}, 8192.123456 + tolerance * 0.5, 2},
+        {"integer boundary outside", {100.0 - tolerance * 0.75}, {2}, 100.0 + tolerance * 0.75, 0},
     };
     if (classCount == 4)
-        cases.push_back({"fourth actual group", {q, q + tolerance * 0.75}, {3, 4}, q, 4});
+        cases.push_back({"fourth actual group", {q, q + tolerance * 0.75}, {3, 4}, q + tolerance * 0.75, 4});
 
     Config cfg{};
     cfg.classes = classCount; cfg.minMatched = 1; cfg.fragmentTolerance = tolerance;
@@ -77,16 +81,34 @@ void checkQueries(double tolerance, int classCount) {
     Buffer<Candidate> candidates(hostCandidates);
     Buffer<PeptideInput> peptides(hostPeptides);
     Buffer<Result> results(cases.size());
-    // Check that class 0 is not filtered or remapped during scene generation.
-    Buffer<float3> centers(hostPeaks.size());
-    mvh_rt_gpu::generateSphereCenters(peaks.p, classes.p, centers.p, centers.n);
+    // Verify compact copies retain the exact original peak identity and split layout.
+    const auto hostOffsets = mvh_rt_gpu::sphereCenterOffsets(peaks.p, peaks.n, tolerance);
+    Buffer<uint64_t> centerOffsets(hostOffsets);
+    Buffer<float3> centers(hostOffsets.back());
+    Buffer<unsigned> identities(hostOffsets.back());
+    mvh_rt_gpu::generateSphereCenters(peaks.p, centerOffsets.p, centers.p,
+                                      identities.p, peaks.n, tolerance);
     synced();
     std::vector<float3> actualCenters;
-    centers.read(actualCenters);
-    for (size_t i = 0; i < actualCenters.size(); ++i)
-        if (actualCenters[i].x != float(hostPeaks[i]) ||
-            actualCenters[i].y != float(hostClasses[i]) || actualCenters[i].z != 0.0f)
-            throw std::runtime_error("Sphere layout changed mass/class identity");
+    std::vector<unsigned> actualIdentities;
+    centers.read(actualCenters); identities.read(actualIdentities);
+    for (size_t i = 0; i < hostPeaks.size(); ++i) {
+        const double integer = std::floor(hostPeaks[i]);
+        const double fraction = hostPeaks[i] - integer;
+        std::vector<float3> expected{make_float3(float(integer), float(fraction), 0)};
+        if (fraction <= tolerance)
+            expected.push_back(make_float3(float(integer - 1), float(fraction + 1), 0));
+        if (1 - fraction <= tolerance)
+            expected.push_back(make_float3(float(integer + 1), float(fraction - 1), 0));
+        if (hostOffsets[i + 1] - hostOffsets[i] != expected.size())
+            throw std::runtime_error("Wrong boundary copy count");
+        for (size_t j = 0; j < expected.size(); ++j) {
+            const auto k = hostOffsets[i] + j;
+            if (actualCenters[k].x != expected[j].x || actualCenters[k].y != expected[j].y ||
+                actualCenters[k].z != 0 || actualIdentities[k] != i)
+                throw std::runtime_error("Wrong split layout or peak identity");
+        }
+    }
     mvh_rt_gpu::Params params{};
     params.scans = scans.p; params.candidates = candidates.p; params.peptides = peptides.p;
     params.peaks = peaks.p; params.classes = classes.p; params.lnTable = lnTable.p;
@@ -110,7 +132,7 @@ void checkQueries(double tolerance, int classCount) {
                 const int count = hostScans[i].counts[cls - 1];
                 const double expected = (table[1000] - table[999]) - (table[count] - table[count - 1]);
                 if (std::abs(result.score - expected) > 1e-12)
-                    throw std::runtime_error("Wrong class priority / MVH score: " + cases[i].name);
+                    throw std::runtime_error("Wrong nearest-peak MVH score: " + cases[i].name);
             }
         }
     }
@@ -140,7 +162,7 @@ void checkQueries(double tolerance, int classCount) {
     } catch (const std::runtime_error &) { rejected = true; }
     if (!rejected) throw std::runtime_error("GAS reused with a changed class range");
     mvh_rt_gpu::reset();
-    for (double invalidRadius : {0.0, 1.0, std::numeric_limits<double>::quiet_NaN()}) {
+    for (double invalidRadius : {0.0, 0.5, 1.0, std::numeric_limits<double>::quiet_NaN()}) {
         auto invalid = cfg;
         invalid.fragmentTolerance = invalidRadius;
         rejected = false;
@@ -150,7 +172,7 @@ void checkQueries(double tolerance, int classCount) {
         } catch (const std::runtime_error &) { rejected = true; }
         if (!rejected) throw std::runtime_error("Invalid radius was accepted");
     }
-    std::cout << "PASS: sphere layout/class priority/zero class/reuse, queries="
+    std::cout << "PASS: split sphere layout/nearest mass/boundary copies/zero class/reuse, queries="
               << cases.size() << " classes=" << classCount << " radius=" << tolerance << '\n';
 }
 }

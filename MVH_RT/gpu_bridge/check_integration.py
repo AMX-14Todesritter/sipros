@@ -53,15 +53,16 @@ def main():
                         assert differences and all(int(value) == 0 for value in differences), log
         assert len(set(outputs)) == 1, "Sample PSMs differ by backend, verification, or batch size"
 
-        # Sphere matching uses a different class-priority rule. Compare its
-        # batches to itself, not to the original nearest-mass scoring rule.
+        # Split-coordinate spheres use nearest-mass matching. This sample
+        # also checks parity with the double CPU/CUDA verifier.
         sphere_outputs = []
         for batch in (2000000, 3):
-            output, log = run(f"sphere_{batch}", "rt-custom", False, batch)
+            output, log = run(f"sphere_{batch}", "rt-custom", True, batch)
             sphere_outputs.append((output / "mvh_psms.tsv").read_bytes())
-            assert all(count == 0 for count in bucket_entries(log, "host_bucket_entries")), log
+            assert all(count > 0 for count in bucket_entries(log, "host_bucket_entries")), log
             assert all(count == 0 for count in bucket_entries(log, "device_bucket_entries")), log
             assert log.count("[RT GPU setup]") == 1, log
+        assert sphere_outputs[0] == outputs[0], "Sphere sample differs from CUDA"
         assert len(set(sphere_outputs)) == 1, "Sphere outputs changed with batch size"
 
         # Repeat identical peptides under different protein names across batch

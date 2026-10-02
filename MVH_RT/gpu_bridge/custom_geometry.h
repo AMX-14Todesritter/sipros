@@ -2,8 +2,10 @@
 #include "geometry.h"
 
 namespace mvh_rt_gpu {
-// One center per input peak, preserving peak indices, including class 0.
-// The uniform sphere radius is stored by bridge.cpp.
-void generateSphereCenters(const double *peaks, const int *classes,
-                           float3 *centers, size_t count);
+// Compact base and boundary-copy centers, with original global peak identities.
+std::vector<uint64_t> sphereCenterOffsets(const double *peaks, size_t count,
+                                         double tolerance);
+void generateSphereCenters(const double *peaks, const uint64_t *offsets,
+                           float3 *centers, unsigned *peakIndices,
+                           size_t count, double tolerance);
 }

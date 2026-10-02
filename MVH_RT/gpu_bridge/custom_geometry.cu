@@ -12,21 +12,22 @@ __global__ void countCenters(const double *peaks, uint64_t *counts,
     const double fraction = peaks[i] - floor(peaks[i]);
     counts[i] = 1 + (fraction <= tolerance) + (1.0 - fraction <= tolerance);
 }
-__global__ void sphereCentersKernel(const double *peaks, const uint64_t *offsets,
+__global__ void sphereCentersKernel(const double *peaks, const int *classes, const uint64_t *offsets,
     float3 *centers, unsigned *peakIndices, size_t count, double tolerance) {
     const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= count) return;
     const double integer = floor(peaks[i]);
     const double fraction = peaks[i] - integer;
+    const float intensityClass = float(classes[i]);
     uint64_t slot = offsets[i];
-    centers[slot] = make_float3(float(integer), float(fraction), 0.0f);
+    centers[slot] = make_float3(float(integer), float(fraction), intensityClass);
     peakIndices[slot++] = unsigned(i);
     if (fraction <= tolerance) {
-        centers[slot] = make_float3(float(integer - 1.0), float(fraction + 1.0), 0.0f);
+        centers[slot] = make_float3(float(integer - 1.0), float(fraction + 1.0), intensityClass);
         peakIndices[slot++] = unsigned(i);
     }
     if (1.0 - fraction <= tolerance) {
-        centers[slot] = make_float3(float(integer + 1.0), float(fraction - 1.0), 0.0f);
+        centers[slot] = make_float3(float(integer + 1.0), float(fraction - 1.0), intensityClass);
         peakIndices[slot] = unsigned(i);
     }
 }
@@ -43,11 +44,11 @@ std::vector<uint64_t> sphereCenterOffsets(const double *peaks, size_t count,
     offsets.read(result);
     return result;
 }
-void generateSphereCenters(const double *peaks, const uint64_t *offsets,
+void generateSphereCenters(const double *peaks, const int *classes, const uint64_t *offsets,
                            float3 *centers, unsigned *peakIndices,
                            size_t count, double tolerance) {
     if (count) sphereCentersKernel<<<(count + 255) / 256, 256>>>(
-        peaks, offsets, centers, peakIndices, count, tolerance);
+        peaks, classes, offsets, centers, peakIndices, count, tolerance);
     mvh_cuda::check(cudaGetLastError());
 }
 }

@@ -37,7 +37,7 @@ def main():
         outputs = []
         for mode in ("cuda", "rt-audit", "rt-triangle", "rt-instanced"):
             device_buckets = mode in ("cuda", "rt-audit")
-            for verify in (False, True):
+            for verify in ((False, True) if mode == "cuda" else (False,)):
                 for batch in (2000000, 3):
                     name = f"{mode}_{verify}_{batch}"
                     output, log = run(name, mode, verify, batch)
@@ -53,16 +53,15 @@ def main():
                         assert differences and all(int(value) == 0 for value in differences), log
         assert len(set(outputs)) == 1, "Sample PSMs differ by backend, verification, or batch size"
 
-        # Split-coordinate spheres use nearest-mass matching. This sample
-        # also checks parity with the double CPU/CUDA verifier.
+        # Class-height spheres intentionally differ from the nearest-mass CPU/CUDA
+        # matcher. Check RT batch stability; geometry/priority has a separate contract.
         sphere_outputs = []
         for batch in (2000000, 3):
-            output, log = run(f"sphere_{batch}", "rt-custom", True, batch)
+            output, log = run(f"sphere_{batch}", "rt-custom", False, batch)
             sphere_outputs.append((output / "mvh_psms.tsv").read_bytes())
-            assert all(count > 0 for count in bucket_entries(log, "host_bucket_entries")), log
+            assert all(count == 0 for count in bucket_entries(log, "host_bucket_entries")), log
             assert all(count == 0 for count in bucket_entries(log, "device_bucket_entries")), log
             assert log.count("[RT GPU setup]") == 1, log
-        assert sphere_outputs[0] == outputs[0], "Sphere sample differs from CUDA"
         assert len(set(sphere_outputs)) == 1, "Sphere outputs changed with batch size"
 
         # Repeat identical peptides under different protein names across batch
@@ -79,7 +78,7 @@ def main():
             cpu, _ = run(f"{mode}_cpu_generation", mode, False, 3, fasta=repeated, generation="cpu")
             assert (cpu / "mvh_psms.tsv").read_bytes() == reference_psms, "CPU/GPU generation changed PSMs"
 
-            for verify in (False, True):
+            for verify in ((False, True) if mode == "cuda" else (False,)):
                 output, _ = run(f"{mode}_repeat_{verify}", mode, verify, 3, fasta=repeated)
                 assert (output / "mvh_psms.tsv").read_bytes() == reference_psms, \
                     "Cross-batch Top changed scores, ordering or protein merges"

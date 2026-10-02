@@ -18,11 +18,11 @@ struct SearchRay {
 // Split the query using double subtraction before converting the fraction.
 __device__ SearchRay makeSearchRay(double mz) {
     const double integer = floor(mz);
-    return {make_float3(float(integer), float(mz - integer), 0.5f),
+    return {make_float3(float(integer), float(mz - integer), 3.5f),
             make_float3(0.0f, 0.0f, -1.0f), 0.0f, params.rayTmax};
 }
 
-// Equal-radius spheres: earliest entry chooses the nearest fractional coordinate.
+// Closest-hit prefers the highest reachable class; within a class, nearest mass.
 __device__ unsigned tracePeak(OptixTraversableHandle handle, double mz) {
     if (!handle) return NoPeak;
     const auto ray = makeSearchRay(mz);

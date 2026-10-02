@@ -23,7 +23,7 @@ std::unique_ptr<SphereState> state;
 void validateConfiguration(const mvh_cuda::Config& config) {
     const float radius = static_cast<float>(config.fragmentTolerance);
     if (!std::isfinite(config.fragmentTolerance) || radius <= 0 || radius >= 0.5f)
-        throw std::runtime_error("Sphere RT requires a radius in (0, 0.5) for integer-column separation and ray origin z=0.5");
+        throw std::runtime_error("Sphere RT requires a radius in (0, 0.5) for integer-column separation and ray origin z=3.5");
     if (config.classes < 1 || config.classes > mvh_cuda::MaxClasses)
         throw std::runtime_error("Sphere RT class count is outside the supported range");
 }
@@ -57,10 +57,10 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     next->centers = std::make_unique<DeviceBuffer<float3>>(centerCount);
     next->peakIndices = std::make_unique<DeviceBuffer<unsigned>>(centerCount);
     next->radius = std::make_unique<DeviceBuffer<float>>(std::vector<float>{radius});
-    generateSphereCenters(peaks, next->offsets->data, next->centers->data,
+    generateSphereCenters(peaks, classes, next->offsets->data, next->centers->data,
                           next->peakIndices->data, peakCount, config.fragmentTolerance);
-    next->rayOriginY = 0.5f; // Retained Params ABI field; custom rays use z=0.5.
-    next->rayTmax = 1.0f;
+    next->rayOriginY = 3.5f; // Retained Params ABI field; custom rays use z=3.5.
+    next->rayTmax = 3.5f;
     checkCuda(cudaDeviceSynchronize());
 
     OptixAccelBuildOptions options{};
@@ -93,7 +93,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     next->scene.initializeSbt();
     state = std::move(next);
     std::cout << "[RT GPU setup] scans=" << scans.size()
-              << " geometry=split-mz-spheres active_scans=" << stats.activeScans
+              << " geometry=split-mz-class-spheres active_scans=" << stats.activeScans
               << " as_bytes=" << stats.outputBytes
               << " scratch_bytes=" << stats.scratchBytes
               << " geometry_bytes=" << centerCount * (sizeof(float3) + sizeof(unsigned)) + offsets.size() * sizeof(uint64_t) + sizeof(float)

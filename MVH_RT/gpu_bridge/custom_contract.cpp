@@ -27,11 +27,11 @@ void checkQueries(double tolerance, int classCount) {
         {"positive interior", {q}, {1}, q + tolerance * 0.5, 1},
         {"negative interior", {q}, {2}, q - tolerance * 0.5, 2},
         {"clearly outside", {q}, {3}, q + tolerance * 1.5, 0},
-        {"nearest mass over class", {q, q + tolerance * 0.75}, {1, 3}, q, 1},
+        {"reachable higher class over nearest mass", {q, q + tolerance * 0.75}, {1, 3}, q, 3},
         {"outside higher class", {q, q + tolerance * 1.5}, {2, 3}, q, 2},
-        {"distinct nearby masses", {q, q + tolerance * 0.25, q + tolerance * 0.5}, {1, 2, 3}, q, 1},
+        {"distinct nearby masses", {q, q + tolerance * 0.25, q + tolerance * 0.5}, {1, 2, 3}, q, 3},
         {"class zero is unscored", {q}, {0}, q, 0},
-        {"nearest zero class", {q, q + tolerance * 0.5}, {0, 1}, q, 0},
+        {"positive class above zero", {q, q + tolerance * 0.5}, {0, 1}, q, 1},
         {"same class candidates", {q - tolerance * 0.5, q}, {2, 2}, q, 2},
         {"large mass", {8192.0}, {2}, 8192.0, 2},
         {"zero mass", {0.0}, {1}, 0.0, 1},
@@ -41,7 +41,10 @@ void checkQueries(double tolerance, int classCount) {
         {"integer boundary outside", {100.0 - tolerance * 0.75}, {2}, 100.0 + tolerance * 0.75, 0},
     };
     if (classCount == 4)
-        cases.push_back({"fourth actual group", {q, q + tolerance * 0.75}, {3, 4}, q + tolerance * 0.75, 4});
+        cases.push_back({"class four above ray origin", {q, q + tolerance * 0.75}, {3, 4}, q + tolerance * 0.75, 3});
+
+    if (classCount == 4)
+        cases.push_back({"class four alone is unreachable", {q}, {4}, q, 0});
 
     Config cfg{};
     cfg.classes = classCount; cfg.minMatched = 1; cfg.fragmentTolerance = tolerance;
@@ -86,7 +89,7 @@ void checkQueries(double tolerance, int classCount) {
     Buffer<uint64_t> centerOffsets(hostOffsets);
     Buffer<float3> centers(hostOffsets.back());
     Buffer<unsigned> identities(hostOffsets.back());
-    mvh_rt_gpu::generateSphereCenters(peaks.p, centerOffsets.p, centers.p,
+    mvh_rt_gpu::generateSphereCenters(peaks.p, classes.p, centerOffsets.p, centers.p,
                                       identities.p, peaks.n, tolerance);
     synced();
     std::vector<float3> actualCenters;
@@ -105,7 +108,7 @@ void checkQueries(double tolerance, int classCount) {
         for (size_t j = 0; j < expected.size(); ++j) {
             const auto k = hostOffsets[i] + j;
             if (actualCenters[k].x != expected[j].x || actualCenters[k].y != expected[j].y ||
-                actualCenters[k].z != 0 || actualIdentities[k] != i)
+                actualCenters[k].z != float(hostClasses[i]) || actualIdentities[k] != i)
                 throw std::runtime_error("Wrong split layout or peak identity");
         }
     }
@@ -132,7 +135,7 @@ void checkQueries(double tolerance, int classCount) {
                 const int count = hostScans[i].counts[cls - 1];
                 const double expected = (table[1000] - table[999]) - (table[count] - table[count - 1]);
                 if (std::abs(result.score - expected) > 1e-12)
-                    throw std::runtime_error("Wrong nearest-peak MVH score: " + cases[i].name);
+                    throw std::runtime_error("Wrong class-height MVH score: " + cases[i].name);
             }
         }
     }
@@ -172,7 +175,7 @@ void checkQueries(double tolerance, int classCount) {
         } catch (const std::runtime_error &) { rejected = true; }
         if (!rejected) throw std::runtime_error("Invalid radius was accepted");
     }
-    std::cout << "PASS: split sphere layout/nearest mass/boundary copies/zero class/reuse, queries="
+    std::cout << "PASS: split sphere layout/class height/boundary copies/zero class/reuse, queries="
               << cases.size() << " classes=" << classCount << " radius=" << tolerance << '\n';
 }
 }

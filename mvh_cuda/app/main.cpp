@@ -16,10 +16,11 @@ int main(int argc, char **argv) {
         for (int i=1; i<argc; ++i) {
             std::string key=argv[i];
             if (key=="--score-impact") { scoreImpact = true; continue; }
+            if(key=="--candidate-reuse-stats"){mvh_cuda::setCandidateReuseStats(true);continue;}
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--candidate-reuse-stats] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;

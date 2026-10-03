@@ -7,6 +7,7 @@ class MS2Scan;
 class Peptide;
 namespace mvh_cuda {
 void setVerification(bool enabled);
+void setCandidateReuseStats(bool enabled);
 bool verificationEnabled();
 void setResultRestoration(const std::string& mode);
 const char* resultRestorationName();

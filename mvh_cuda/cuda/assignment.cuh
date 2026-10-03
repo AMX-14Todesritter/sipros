@@ -73,6 +73,18 @@ __global__ void assignPeptides2Scans(const MassRange *ranges, const int *rangeCo
     }
 }
 
+// Diagnostic only: unsorted candidates are contiguous by peptide. Count every
+// association (including duplicate precursor hypotheses), separately per charge.
+__global__ void candidateReuseHistogram(const Candidate* candidates, const uint64_t* offsets,
+                                       int peptideCount, int charge, unsigned long long* histogram) {
+    const int peptide = blockIdx.x * blockDim.x + threadIdx.x;
+    if (peptide >= peptideCount) return;
+    uint64_t count = 0;
+    for (uint64_t i = offsets[peptide]; i < offsets[peptide + 1]; ++i)
+        count += candidates[i].charge == charge;
+    if (count) atomicAdd(histogram + count, 1ULL);
+}
+
 __global__ void setCandidateRanges(Scan *scans, const Candidate *candidates, int size) {
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= size) return;

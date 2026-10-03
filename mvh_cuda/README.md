@@ -287,3 +287,15 @@ RT-custom splits double m/z into integer and fractional float coordinates, adds
 boundary copies, and traces downward from z=0.5 through equal-radius spheres.
 Its float boundary and tie behavior still requires comparison with the double
 reference. See [sphere matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).
+
+## Candidate reuse distribution
+
+`--candidate-reuse-stats` prints an exact per-batch histogram of candidate counts
+for each observed `(batch peptide ID, precursor charge)` pair. `[REUSE histogram]`
+rows contain charge, uses and number of groups; `[REUSE batch]` verifies that the
+weighted histogram equals the assignment association count. Unused pairs are
+excluded. Duplicate precursor hypotheses and candidates on skipped scans remain
+included, so this is candidate reuse opportunity, not distinct-scan counts or
+actual ray counts. Equal sequences with different peptide IDs remain separate.
+The diagnostic is off by default, runs before scan sorting, and does not change
+scoring. Its runtime must not be treated as an uninstrumented benchmark.

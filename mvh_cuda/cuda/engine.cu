@@ -22,6 +22,7 @@ namespace mvh_cuda {
 namespace {
 void resetScoringSpectra();
 void resetBatchWorkspace();
+bool candidateReuseStats=false;
 bool verification=false;
 bool deferSearchResults=true;
 bool scoreImpactEnabled = false;
@@ -135,6 +136,7 @@ Config configuration(){
 template<class T> void append(std::vector<T>&dest,const std::vector<T>&src){dest.insert(dest.end(),src.begin(),src.end());}
 void same(double a,double b,const std::string &name){require(a==b,name+" differs: "+std::to_string(a)+" vs "+std::to_string(b));}
 }
+void setCandidateReuseStats(bool enabled){candidateReuseStats=enabled;}
 void setVerification(bool enabled){verification=enabled;}
 bool verificationEnabled(){return verification;}
 void setResultRestoration(const std::string& mode) {
@@ -389,6 +391,31 @@ void assignPeptides2Scans(const PeptideBatch &peptides,
         assignPeptides2Scans<<<(size + 127) / 128, 128>>>(ranges.p, rangeCounts.p,
             offsets.p, size, windowCount, devicePrecursors.p, unsorted.p, keys.p);
         check(cudaGetLastError());
+        if (candidateReuseStats) {
+            std::vector<uint64_t> hostCounts;
+            counts.read(hostCounts);
+            const auto maxUses = *std::max_element(hostCounts.begin(), hostCounts.end());
+            Buffer<unsigned long long> histogram(maxUses + 1);
+            uint64_t totalGroups = 0, totalAssociations = 0;
+            for (int charge = 0; charge <= batch->maxCharge; ++charge) {
+                check(cudaMemset(histogram.p, 0, histogram.n * sizeof(unsigned long long)));
+                candidateReuseHistogram<<<(size + 127) / 128, 128>>>(unsorted.p, offsets.p,
+                    size, charge, histogram.p);
+                check(cudaGetLastError());
+                std::vector<unsigned long long> hostHistogram;
+                histogram.read(hostHistogram);
+                for (size_t uses = 1; uses < hostHistogram.size(); ++uses) {
+                    const auto groups = hostHistogram[uses];
+                    if (!groups) continue;
+                    totalGroups += groups; totalAssociations += uses * groups;
+                    std::cout << "[REUSE histogram] charge=" << charge << " uses=" << uses
+                              << " groups=" << groups << '\n';
+                }
+            }
+            require(totalAssociations == associations, "Reuse histogram association count mismatch");
+            std::cout << "[REUSE batch] groups=" << totalGroups
+                      << " associations=" << totalAssociations << '\n';
+        }
         size_t bytes = 0;
         check(cub::DeviceRadixSort::SortPairs(nullptr, bytes, keys.p, sortedKeys.p,
             unsorted.p, batch->candidates->p, int(associations)));
@@ -1289,6 +1316,17 @@ void runContractTests(){
         Buffer<Candidate> candidates(6), sorted(6); Buffer<int> keys(6), sortedKeys(6);
         assignPeptides2Scans<<<1,128>>>(ranges.p,rangesPerPeptide.p,offsets.p,
                                        3,2,dp.p,candidates.p,keys.p);
+        // Two peptide IDs, multiple charges, duplicate precursor, and an empty peptide.
+        Buffer<unsigned long long> histogram(7);
+        for (int charge : {0, 2, 3, 9}) {
+            check(cudaMemset(histogram.p, 0, 7*sizeof(unsigned long long)));
+            candidateReuseHistogram<<<1,128>>>(candidates.p, offsets.p, 3, charge, histogram.p);
+            synced(); std::vector<unsigned long long> actual; histogram.read(actual);
+            std::vector<unsigned long long> expected(7);
+            if (charge == 2) { expected[1] = 1; expected[4] = 1; }
+            if (charge == 3) expected[1] = 1;
+            require(actual == expected, "Candidate reuse distribution mismatch");
+        }
         size_t bytes=0;
         check(cub::DeviceRadixSort::SortPairs(nullptr,bytes,keys.p,sortedKeys.p,
                                              candidates.p,sorted.p,6));

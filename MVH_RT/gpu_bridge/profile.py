@@ -42,6 +42,8 @@ def arguments():
                         help='Selected tools; NSYS always runs before NCU')
     parser.add_argument('--spectrum-cache', choices=['host', 'device'],
                         help='Optimized binary only: keep packed spectra on host or also on GPU')
+    parser.add_argument('--rt-scan-group-size', type=positive, default=64)
+    parser.add_argument('--rt-workspace-mib', type=positive, default=512)
     parser.add_argument('--range-trace', action='store_true',
                         help='Also export individual NVTX calls, nesting and self time (may be large)')
     parser.add_argument('--ncu-set', choices=['basic', 'detailed', 'full'], default='basic')
@@ -80,6 +82,9 @@ def capture_commands(args, inputs, output):
     search = [str(args.binary.resolve()), '-f', str(inputs['scans']), '-c', str(inputs['config']),
               '-fasta', str(inputs['fasta']), '--match-backend', args.backend,
               '--peptide-batch-size', str(args.batch)]
+    if args.backend == 'rt-custom':
+        search += ['--rt-scan-group-size', str(args.rt_scan_group_size),
+                   '--rt-workspace-mib', str(args.rt_workspace_mib)]
     if args.spectrum_cache is not None:
         search += ['--spectrum-cache', args.spectrum_cache]
     commands = {}

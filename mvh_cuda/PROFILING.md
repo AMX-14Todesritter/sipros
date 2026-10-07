@@ -179,3 +179,16 @@ Generation uses one range per batch-sized chunk, paused while processing that ba
 For continued optimization, simply use/rebuild the OFF configuration; the markers can remain in source with no NVTX calls. The shared `mvh_profiling` interface propagates the option and NVTX dependency to the RT support library and bridge as well as the CUDA engine. Standalone OptiX tutorial builds keep these macros disabled. No search logic depends on the profiling wrapper.
 
 Keep instrumentation changes separate from algorithm optimizations in version control. This change does not automatically commit the pre-existing workspace changes. Validate enabled/disabled PSM equality on the same inputs; use non-profiled runs for timing comparisons because capture adds overhead.
+
+## Precursor-grouped shared RT (2026-10-07)
+
+Use `--tools nsys --batch 8000000 --rt-scan-group-size 64 --rt-workspace-mib 512`
+for the full Marine capture of this design. New `mvh/rt/shared/*` ranges separate
+candidate radix sorting, compact theory/task generation, raw hit counting,
+hit allocation/writing, and CUDA reduction/MVH. Existing assignment ranges
+and CUDA kernel summaries remain available for precursor query analysis.
+The capture uses class3→2→1 semantics, not the earlier nearest-mass RT backend.
+Keep `MVH_ENABLE_FLOW_COUNTERS=OFF`: the legacy per-candidate flow observer
+does not account for this shared pipeline, and counters-enabled custom execution
+is rejected rather than reporting incomplete totals. Normal CPU/CUDA counters
+remain supported. NSYS timing contains profiler overhead, not a normal benchmark.

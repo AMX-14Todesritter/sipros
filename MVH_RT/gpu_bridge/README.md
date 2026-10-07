@@ -206,15 +206,16 @@ docker exec sipros-sipros-1 python3 -B MVH_RT/gpu_bridge/validate_score_impact.p
 
 ## 独立实验后端 rt-custom
 
-`rt-custom` 当前为内置 sphere 基础框架：球心 `(m/z, class, 0)`，半径取质量容差，从上方向下发射并选择 closest-hit。class 不反转，编号较大的组优先；class 0 不在几何阶段过滤，但现有评分仍不把它作为有效评分组。
+当前 RT-custom 按 scan 最小前体假设中性质量在 GPU 排序分组，每组 K 张不同 scan，
+class 1、2、3 合并一棵 GAS。`--rt-scan-group-size K` 支持任意正整数，默认 8。
+每张 scan 只归属一组；所有前体假设仍筛选 candidate，并通过 scan→group 路由。
 
-原有 `rt-triangle` / `rt-instanced` 保留作旧算法对照，默认后端仍为 CUDA。新规则不要求与旧 CUDA/三角形输出相同；正常与诊断运行、同一后端的批次一致性仍须通过检查。旧 AABB 版本的零差异报告不适用于当前 sphere 实现。
-
-普通新后端继续省略桶索引。`validate_score_impact.py` 可用 `--backends rt-custom` 单独比较新旧规则，性能脚本同样支持该选项。
-
-人工设计入口、资源复用约定和验证命令见 [CUSTOM_MATCHING.md](CUSTOM_MATCHING.md)。
-
-Sphere 场景资源与构建已独立到 `sphere_backend.cpp`；旧三角形场景在 `triangle_backend.cpp`。`bridge.cpp` 只分发后端，公共 GAS/SBT/上传逻辑在 `scene_resources.cpp`。射线设计继续修改 `custom_device.cu`。
+GPU 排序生成共享任务，batch 内按 `(peptideId,charge)` 生成一次理论峰。
+any-hit 完整计数/收集后，CUDA 按 class **3→2→1**、double 质量距离、原 peak ID 归约，再计算 MVH。
+`--rt-workspace-mib` 默认 512 控制局部工作区，整批排序和常驻数据另占显存。
+原 candidate 顺序、Top 和蛋白归属处理保留；`--verify-cuda` 使用独立 CPU class 优先参考。
+规则、GPU 阶段日志、显存边界与验证见 [CUSTOM_MATCHING.md](CUSTOM_MATCHING.md)。
+历史 sphere closest-hit 和旧 class 几何实验的报告不描述当前实现。
 
 ### Parameterized NSYS / NCU profiling
 
@@ -224,6 +225,13 @@ scoring launch with early termination. Use `--tools nsys`, `--tools ncu`,
 `--ncu-launch-skip`, `--ncu-launch-count`, or `--dry-run` as needed.
 See [profiling instructions](../../mvh_cuda/PROFILING.md) for parameters and
 limitations. This script uses the separate `profile_enabled` binary.
+
+The original paths omit NVTX and fine-grained timers. RT-custom now reports
+aggregate synchronous stage times for its new sorting/theory/collection/reduction
+pipeline; these do not measure precursor assignment or the complete search. Normal search,
+benchmark and validation commands remain available. Overall search time and
+configuration-through-export total time are reported after the calculation.
+Benchmark reports show unavailable scoring/RT setup timings as `—`, not zero.
 
 ### 细粒度函数耗时 CSV
 

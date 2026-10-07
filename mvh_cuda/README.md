@@ -122,7 +122,9 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 
 需要量化 RT 对 MVH 分数及最终 top 候选的影响时，使用 [评分影响验证脚本](../MVH_RT/gpu_bridge/README.md#用-mvh-分数和最终-top-候选评估差异)。`--score-impact` 为显式诊断开关，默认关闭，诊断耗时不作性能指标。
 
-实验 RT 构建可选 `--match-backend rt-custom`，当前采用 `(m/z, 原始 class, 0)` 内置 sphere 和向下 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
+实验 RT 构建可选 `--match-backend rt-custom --rt-scan-group-size K`：保留 double 整数/小数拆分 sphere，按最小前体假设中性质量分组，每组最多 K 张 scan，class 1/2/3 合并 GAS。CUDA 在 batch 内复用理论峰，any-hit 完整收集后 CUDA 归约，优先 class 3 → 2 → 1。`--rt-workspace-mib` 控制局部工作区。规则与验证见 [CUSTOM_MATCHING.md](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
+
+
 
 Optional, default-off NVTX stage instrumentation and separate profiling builds:
 [PROFILING.md](PROFILING.md). Enable with `-DMVH_ENABLE_PROFILING=ON`; use `OFF`
@@ -289,18 +291,15 @@ version. Keep baseline and optimized measurements identified by binary hash.
 CPU/CUDA matching now follows `rtMVH_v0.0`: choose the nearest mass strictly
 within tolerance, independent of class; an exact distance tie keeps the first
 encountered peak. A selected class-0 peak is unscored.
-RT-custom uses equal-radius spheres at `(floor(mz), mz-floor(mz), 0)` and rays
-along negative Z. Boundary copies preserve queries across integer columns;
-primitive indices map back to the original experimental peaks. Float sphere
-intersection can still differ at boundaries or exact ties from double matching.
-See [sphere matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).
-
-Historical Marine 10M reports from commit `82522a4` used class-priority geometry
-and do not measure this corrected implementation. Rebuild before new profiling.
+RT-custom now uses precursor-mass scan groups, mixed-class split-m/z spheres,
+complete any-hit collection and CUDA class3→2→1 reduction. This intentionally
+has different peak-selection semantics from the nearest-mass CPU/CUDA backend.
+See [shared matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).
 
 ## Profiling integration of GPU workflow changes
 
-The profiling branch uses the same nearest-mass matching as `rtMVH_v0.0` and retains NVTX ranges.
+The profiling branch retains nearest-mass CPU/CUDA matching and NVTX ranges;
+RT-custom integrates the precursor-grouped shared design from `5608c77`.
 Continuous input packing, block-based GPU peptide generation and final result
 restoration now also have NVTX ranges; there is no per-peptide NVTX annotation.
 Build `build/mvh_rt/profile_enabled` with `MVH_ENABLE_PROFILING=ON` and

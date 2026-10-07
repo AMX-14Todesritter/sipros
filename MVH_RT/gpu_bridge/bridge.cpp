@@ -18,14 +18,14 @@ void reset() {
 void prepare(const std::vector<mvh_cuda::Scan>& scans,
              const mvh_cuda::Scan* deviceScans, const double* devicePeaks,
              const int* deviceClasses, size_t peakCount, GeometryKind geometry,
-             const mvh_cuda::Config& config) {
+             const mvh_cuda::Config& config, const std::vector<mvh_cuda::Precursor>& precursors) {
     MVH_PROFILE_SCOPE("mvh/rt/bridge/prepare");
     if (activeGeometry && *activeGeometry != geometry)
         throw std::runtime_error("RT backend changed without reset");
 
     switch (geometry) {
     case GeometryKind::Spheres:
-        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config);
+        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config, precursors);
         break;
     case GeometryKind::Triangles:
     case GeometryKind::InstancedTriangles:

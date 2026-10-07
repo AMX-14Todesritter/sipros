@@ -61,7 +61,7 @@ enum class PrimitiveKind { Triangle, Sphere };
 void createPipeline(
     OptixObjects& objects,
     const std::filesystem::path& ptxPath, bool instanced = false,
-    PrimitiveKind primitive = PrimitiveKind::Triangle);
+    PrimitiveKind primitive = PrimitiveKind::Triangle, bool anyHit = false);
 
 std::vector<ScanPeak> makeScene(
     const std::vector<double>& mzValues,

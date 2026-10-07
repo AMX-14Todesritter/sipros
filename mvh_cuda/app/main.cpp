@@ -19,17 +19,30 @@ int main(int argc, char **argv) {
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--rt-scan-group-size K (positive)] [--rt-workspace-mib N (>=16)] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;
             }
-            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--match-backend" && key!="--spectrum-cache" && key!="--peptide-generation" && key!="--result-restoration")
+            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--match-backend" && key!="--spectrum-cache" && key!="--peptide-generation" && key!="--result-restoration" && key!="--rt-scan-group-size" && key!="--rt-workspace-mib")
                 throw std::runtime_error("Unknown option: "+key);
             if (++i==argc || options.count(key)) throw std::runtime_error("Missing/duplicate option: "+key);
             options[key]=argv[i];
         }
         if (options.count("--match-backend")) mvh_cuda::setMatchBackend(options["--match-backend"]);
+        if (options.count("--rt-scan-group-size")) {
+            size_t used = 0;
+            const auto &value = options["--rt-scan-group-size"];
+            int size = std::stoi(value, &used);
+            if (used != value.size()) throw std::runtime_error("Invalid RT scan group size");
+            mvh_cuda::setRtScanGroupSize(size);
+        }
+        if(options.count("--rt-workspace-mib")) {
+            size_t used=0;const auto &value=options["--rt-workspace-mib"];
+            int size=std::stoi(value,&used);
+            if(used!=value.size())throw std::runtime_error("Invalid RT workspace size");
+            mvh_cuda::setRtWorkspaceMiB(size);
+        }
         mvh_cuda::setScoreImpact(scoreImpact);
         if(options.count("--result-restoration"))mvh_cuda::setResultRestoration(options["--result-restoration"]);
         if (options.count("--peptide-generation")) mvh_cuda::setPeptideGeneration(options["--peptide-generation"]);

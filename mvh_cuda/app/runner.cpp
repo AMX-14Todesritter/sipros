@@ -89,6 +89,10 @@ void mvh_app::run(const std::string &input, const std::string &config,
            << "scan_count\t" << scans.size() << '\n'
            << "skipped_scan_count\t" << skipped << '\n'
            << "retained_psm_count\t" << count << '\n';
+    if (mvh_cuda::matchBackendName()=="rt-custom")
+        report << "rt_scan_group_size\t" << mvh_cuda::rtScanGroupSize() << '\n'
+               << "rt_scan_grouping\tmin-neutral-mass\nrt_class_priority\t3,2,1\n"
+               << "rt_workspace_mib\t" << mvh_cuda::rtWorkspaceMiB() << '\n';
     report.close();
 #ifdef MVH_ENABLE_FLOW_COUNTERS
     mvh_flow::write(output,searched-prepared,count);

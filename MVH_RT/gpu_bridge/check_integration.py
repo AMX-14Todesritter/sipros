@@ -22,12 +22,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="gpu_rt_bridge_") as temporary:
         root = Path(temporary)
 
-        def run(name, mode, verify, batch, spectrum=None, fasta=None, generation="cuda", restoration="final"):
+        def run(name, mode, verify, batch, spectrum=None, fasta=None, generation="cuda", restoration="final", group=8):
             output = root / name
             command = [str(args.binary), "-f", str(spectrum or data / "sample.ft2"),
                        "-c", str(data / "search.cfg"), "-fasta", str(fasta or data / "proteins.fasta"),
                        "-o", str(output), "--match-backend", mode,
                        "--peptide-batch-size", str(batch), "--peptide-generation", generation, "--result-restoration", restoration]
+            if mode == "rt-custom":
+                command.extend(["--rt-scan-group-size", str(group)])
             if verify:
                 command.append("--verify-cuda")
             result = subprocess.run(command, capture_output=True, text=True)
@@ -53,17 +55,36 @@ def main():
                         assert differences and all(int(value) == 0 for value in differences), log
         assert len(set(outputs)) == 1, "Sample PSMs differ by backend, verification, or batch size"
 
-        # Split-coordinate spheres use nearest-mass matching. This sample
-        # also checks parity with the double CPU/CUDA verifier.
+        # Shared split-coordinate spheres use class priority 3 -> 2 -> 1.
+        # Their independent CPU verifier checks the new rule.
         sphere_outputs = []
-        for batch in (2000000, 3):
-            output, log = run(f"sphere_{batch}", "rt-custom", True, batch)
+        for group, batch in ((1,2000000), (2,3), (8,2000000), (32,3),(128,2000000)):
+            output, log = run(f"sphere_{group}_{batch}", "rt-custom", True, batch, group=group)
             sphere_outputs.append((output / "mvh_psms.tsv").read_bytes())
             assert all(count > 0 for count in bucket_entries(log, "host_bucket_entries")), log
             assert all(count == 0 for count in bucket_entries(log, "device_bucket_entries")), log
             assert log.count("[RT GPU setup]") == 1, log
-        assert sphere_outputs[0] == outputs[0], "Sphere sample differs from CUDA"
         assert len(set(sphere_outputs)) == 1, "Sphere outputs changed with batch size"
+
+        # A real shared launch spans several groups and a partial final group.
+        multi = root / "multi.ft2"
+        lines = (data / "sample.ft2").read_text().splitlines()
+        header = [line for line in lines if line.startswith("H\t")]
+        body = [line for line in lines if not line.startswith("H\t")]
+        blocks = []
+        for scan in range(35):
+            blocks.extend("S\t" + str(2000+scan) + "\t" + line.split("\t",2)[2]
+                          if line.startswith("S\t") else line for line in body)
+        multi.write_text("\n".join(header+blocks)+"\n")
+        multi_outputs = []
+        for group, batch in ((1,2000000),(2,3),(8,2000000),(32,3),(128,2000000)):
+            output, log = run(f"multi_{group}", "rt-custom", True, batch, spectrum=multi, group=group)
+            multi_outputs.append((output / "mvh_psms.tsv").read_bytes())
+            pairs = re.findall(r"\[RT shared tasks\] candidates=(\d+) tasks=(\d+)",log)
+            assert pairs, log
+            if group > 1:
+                assert any(int(tasks)<int(candidates) for candidates,tasks in pairs), log
+        assert len(set(multi_outputs)) == 1, "Shared multi-scan PSMs depend on K or batch size"
 
         # Repeat identical peptides under different protein names across batch
         # boundaries. Protein attribution must survive GPU-resident Top reuse.

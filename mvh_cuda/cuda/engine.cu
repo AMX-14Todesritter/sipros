@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "engine.h"
 #include "profiling.h"
 #include "sequence_ids.h"
@@ -167,14 +168,46 @@ MatchBackendScope::~MatchBackendScope() {
     mvh_rt_gpu::reset();
 #endif
 }
+int rtScanGroupSize() {
+#ifdef MVH_CUDA_ENABLE_RT
+    return mvh_rt_gpu::scanGroupSize();
+#else
+    return 8;
+#endif
+}
+void setRtScanGroupSize(int size) {
+    require(size >= 1, "RT scan group size must be positive");
+#ifdef MVH_CUDA_ENABLE_RT
+    mvh_rt_gpu::setScanGroupSize(size);
+#else
+    throw std::runtime_error("RT scan grouping requires an RT-enabled build");
+#endif
+}
+void setRtWorkspaceMiB(int size) {
+#ifdef MVH_CUDA_ENABLE_RT
+    mvh_rt_gpu::setWorkspaceMiB(size);
+#else
+    throw std::runtime_error("RT workspace requires an RT-enabled build");
+#endif
+}
+int rtWorkspaceMiB() {
+#ifdef MVH_CUDA_ENABLE_RT
+    return mvh_rt_gpu::workspaceMiB();
+#else
+    return 512;
+#endif
+}
 const std::string &matchBackendName() { return matchBackend; }
 void setMatchBackend(const std::string &name) {
     require(name=="cuda" || name=="rt-triangle" || name=="rt-audit" || name=="rt-instanced" || name=="rt-custom", "Unknown match backend");
 #ifndef MVH_CUDA_ENABLE_RT
     require(name=="cuda", "RT backend was not enabled at build time");
 #endif
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    require(name!="rt-custom", "Shared RT requires flow counters OFF; use NVTX/NSYS for complete profiling");
+#endif
     matchBackend=name;
-    if (name=="rt-custom") std::cout << "[RT backend] rt-custom; built-in split-mz spheres; nearest-mass closest-hit\n";
+    if (name=="rt-custom") std::cout << "[RT backend] rt-custom; grouped split-mz spheres; any-hit priority 3 -> 2 -> 1\n";
     else if (name!="cuda") std::cout << "[RT backend] " << name
         << "; experimental unshifted triangles; known zero-distance/boundary differences\n";
 }
@@ -805,8 +838,8 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
 
         mvh_rt_gpu::prepare(
             batch.scans, scans.p, peaks.p, classes.p,
-            peaks.n, geometry, config);
-            }
+            peaks.n, geometry, config, batch.assignment->precursors);
+    }
 #endif
 
     MVH_PROFILE_BEGIN(theoryRange, "mvh/gpu/theory_cache");
@@ -822,7 +855,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     check(cudaMemGetInfo(&freeBytes, &totalBytes));
     // Dense IDs make cache lookups constant-time. For unusually high charges
     // or limited VRAM, score directly on the GPU instead of forcing a huge cache.
-    if (useIonCache && size && keys < 32000000 && keys * 20 < freeBytes / 2) {
+    if (matchBackend!="rt-custom" && useIonCache && !std::getenv("SIPROS_RT_DISABLE_ION_CACHE") && size && keys < 32000000 && keys * 20 < freeBytes / 2) {
         active = std::make_unique<Buffer<int>>(keys);
         ionOffsets = std::make_unique<Buffer<uint64_t>>(keys + 1);
         Buffer<uint64_t> ionCounts(keys + 1);
@@ -1080,6 +1113,43 @@ void updatePendingResults(const std::vector<MS2Scan*>& scans,const PackedScoring
     require(eventIndex==output.events.size(),"Scoring events are not grouped by scan");
 }
 
+// Independent CPU reference for the experimental priority rule. It scans the
+// original host peaks, never the RT geometry or its grouped task reductions.
+bool verifyPriorityScore(Peptide *peptide, int charge, MS2Scan *scan,
+                         std::vector<double>& ions, std::vector<double>& forward,
+                         std::vector<double>& reverse, std::vector<char>& sequence,
+                         const Result& result) {
+    const bool valid=MVH::CalculateSequenceIons(peptide->sNeutralLossPeptide, charge,
+        MVH::bUseSmartPlusThreeModel, &ions, &forward, &reverse, &sequence);
+    if (!valid) return result.status<0;
+    int key[4]={}, predicted=0, matched=0;
+    const auto &peaks=scan->pPeakList->pPeaks;
+    const auto &classes=scan->pPeakList->pClasses;
+    const double tolerance=ProNovoConfig::getMassAccuracyFragmentIon();
+    for (double mz:ions) {
+        if (mz<scan->mzLowerBound || mz>scan->mzUpperBound) continue;
+        ++predicted;
+        int bestClass=0; size_t bestPeak=peaks.size(); double bestDistance=tolerance;
+        for (size_t p=0;p<peaks.size();++p) {
+            const int cls=classes[p]; const double distance=std::abs(mz-peaks[p]);
+            if (cls<1 || cls>3 || !(distance<tolerance)) continue;
+            if (cls>bestClass || (cls==bestClass &&
+                (distance<bestDistance || (distance==bestDistance && p<bestPeak)))) {
+                bestClass=cls; bestPeak=p; bestDistance=distance;
+            }
+        }
+        if (bestClass) { ++key[bestClass-1]; ++matched; } else ++key[3];
+    }
+    const bool scored=matched && matched>=ProNovoConfig::MinMatchedFragments;
+    if (predicted!=result.predicted || matched!=result.matched ||
+        scored!=(result.status==ResultScored || result.status==ResultAccepted)) return false;
+    if (!scored) return true;
+    double value=0;
+    for (int c=0;c<4;++c) value+=MVH::lnCombin(scan->intenClassCounts->at(c),key[c]);
+    value-=MVH::lnCombin(scan->totalPeakBins,predicted);
+    return -value==result.score;
+}
+
 ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
                                    PackedScoringBatch &batch,
                                    const ScoringOutput &output) {
@@ -1107,11 +1177,16 @@ ScoringCounts restoreScoringResults(std::vector<MS2Scan *> &scans,
         }
         if (result.status == ResultMerged) { ++counts.restoredMerges; continue; }
         if (verification) {
+            if (matchBackend=="rt-custom") {
+                require(verifyPriorityScore(peptide,candidate.charge,scan,ions,forward,reverse,sequence,result),
+                        "RT priority/CPU score or count mismatch");
+            } else {
             double score=0;
             const bool ok = MVH::ScoreSequenceVsSpectrum(peptide->sNeutralLossPeptide,
                 candidate.charge, scan, &ions, &forward, &reverse, score, &sequence);
             const bool gpuOk = result.status == ResultScored || result.status == ResultAccepted;
             require(ok == gpuOk && (!ok || score == result.score), "CUDA/CPU score mismatch");
+            }
         }
         if (result.status == ResultAccepted || (verification && result.status == ResultScored)) {
             ++counts.restoredScores;

@@ -1,82 +1,45 @@
 #define MVH_OPTIX_DEVICE
 #include "bridge.h"
-#include "scoring.cuh"
 #include <optix_device.h>
-
 extern "C" { __constant__ mvh_rt_gpu::Params params; }
-
 namespace {
-constexpr unsigned NoPeak = ~0u;
-
-struct SearchRay {
-    float3 origin;
-    float3 direction;
-    float tmin;
-    float tmax;
-};
-
-// Split the query using double subtraction before converting the fraction.
-__device__ SearchRay makeSearchRay(double mz) {
-    const double integer = floor(mz);
-    return {make_float3(float(integer), float(mz - integer), 0.5f),
-            make_float3(0.0f, 0.0f, -1.0f), 0.0f, params.rayTmax};
+struct Query { uint64_t count; unsigned ion; int group; uint64_t start; };
 }
-
-// Equal-radius spheres: earliest entry chooses the nearest fractional coordinate.
-__device__ unsigned tracePeak(OptixTraversableHandle handle, double mz) {
-    if (!handle) return NoPeak;
-    const auto ray = makeSearchRay(mz);
-    unsigned peakIndex = NoPeak;
-    optixTrace(handle, ray.origin, ray.direction, ray.tmin, ray.tmax, 0.0f,
-               255, OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 1, 0, peakIndex);
-    return peakIndex;
-}
-
-struct SphereCounter : mvh_cuda::IonCounter {
-    __device__ SphereCounter(const mvh_cuda::Scan &scan, const mvh_cuda::Config &cfg,
-                             const double *peaks, const int *classes, const short *hub)
-        : IonCounter(scan, cfg, peaks, classes, hub) {}
-
-    __device__ void add(double mz) {
-#ifdef MVH_ENABLE_FLOW_COUNTERS
-        observe(mz);
-#endif
-        if (mz < scan.lower || mz > scan.upper) return;
-        ++predicted;
-        const auto handle = params.handles[&scan - params.scans];
-        const unsigned peakIndex = tracePeak(handle, mz);
-        if (peakIndex == NoPeak) {
-            ++key[cfg.classes];
-            return;
+extern "C" __global__ void __anyhit__record() {
+    const auto pointer=(static_cast<unsigned long long>(optixGetPayload_1())<<32)|optixGetPayload_0();
+    auto &q=*reinterpret_cast<Query*>(pointer);
+    const auto primitive=params.groupSphereOffsets[q.group]+optixGetPrimitiveIndex();
+    if(params.collectMode) {
+        // A second traversal must fit the first traversal's exact allocation.
+        const unsigned task=optixGetLaunchIndex().x;
+        if(q.count>=params.hitOffsets[task+1]-params.hitBase-q.start) {
+            params.hitCounts[task]=~uint64_t(0); optixIgnoreIntersection(); return;
         }
-
-        // Design point 3: scoring handoff. Class 0 can exist in the geometry,
-        // but remains unscored under the existing MVH class convention.
-        const int cls = classes[scan.peakOffset + peakIndex];
-        if (cls > 0) { ++key[cls - 1]; ++matched; }
-        else ++key[cfg.classes];
+        params.hits[q.start+q.count]={q.ion,params.sphereScanIndices[primitive],params.spherePeakIndices[primitive]};
     }
-};
+    ++q.count;
+    optixIgnoreIntersection();
 }
-
-// Design point 4: hit payload. Intersection itself is the built-in OptiX
-// sphere module registered in rt_support.cpp; there is no custom IS here.
-extern "C" __global__ void __closesthit__record() {
-    const int scanId = params.candidates[optixGetLaunchIndex().x].scanId;
-    const auto offset = params.scans[scanId].peakOffset;
-    const auto primitive = params.sphereOffsets[offset] + optixGetPrimitiveIndex();
-    optixSetPayload_0(params.spherePeakIndices[primitive] - unsigned(offset));
-}
-
-extern "C" __global__ void __miss__background() {
-    optixSetPayload_0(NoPeak);
-}
-
-// One launch index scores one candidate. Its theoretical ions each call add().
+extern "C" __global__ void __miss__background() {}
 extern "C" __global__ void __raygen__camera() {
-    const int index = optixGetLaunchIndex().x;
-    params.results[index] = mvh_cuda::scoreCandidate<SphereCounter>(index, params.scans,
-        params.candidates, params.size, params.peptides, params.texts, params.peaks,
-        params.classes, params.hub, params.lnTable, params.results, params.cfg,
-        params.ionOffsets, params.ionValid, params.cachedIons, params.chargeStride);
+    const unsigned index=optixGetLaunchIndex().x;
+    const auto &task=params.sharedTasks[index];
+    Query q{};q.group=task.groupId;q.start=params.collectMode?params.hitOffsets[index]-params.hitBase:0;
+    const bool valid=params.sharedIonValid[task.theoryId]>0;
+    const auto handle=params.handles[task.groupId];
+    if(valid && handle) {
+        const uint64_t begin=params.sharedIonOffsets[task.theoryId];
+        const uint64_t end=params.sharedIonOffsets[task.theoryId+1];
+        for(uint64_t i=begin;i<end;++i) {
+            const double mz=params.sharedIons[i];q.ion=unsigned(i-begin);
+            const double integer=floor(mz);
+            const auto pointer=reinterpret_cast<unsigned long long>(&q);
+            unsigned lo=unsigned(pointer), hi=unsigned(pointer>>32);
+            optixTrace(handle,make_float3(float(integer),float(mz-integer),0.5f),
+                make_float3(0,0,-1),0.0f,params.rayTmax,0.0f,255,
+                OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,0,1,0,lo,hi);
+        }
+    }
+    // Counts are checked by CUDA before reduction. No scores are produced here.
+    if(!params.collectMode || params.hitCounts[index]!=~uint64_t(0))params.hitCounts[index]=q.count;
 }

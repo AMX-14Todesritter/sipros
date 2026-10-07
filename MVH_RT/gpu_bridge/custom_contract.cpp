@@ -4,6 +4,15 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+
+std::vector<mvh_cuda::Precursor> precursorMetadata(const std::vector<mvh_cuda::Scan>& scans) {
+    std::vector<mvh_cuda::Precursor> result;
+    for(size_t i=0;i<scans.size();++i) {
+        result.push_back({1000.0+double(scans.size()-i),int(i),2});
+        result.push_back({2000.0+double(i),int(i),3});
+    }
+    return result;
+}
 #include <string>
 
 namespace {
@@ -26,12 +35,13 @@ void checkQueries(double tolerance, int classCount) {
         {"rounded float zero", {100.075691}, {2}, 100.07569046688, 2},
         {"positive interior", {q}, {1}, q + tolerance * 0.5, 1},
         {"negative interior", {q}, {2}, q - tolerance * 0.5, 2},
+        {"strict boundary", {100.0}, {3}, 100.125, 0},
         {"clearly outside", {q}, {3}, q + tolerance * 1.5, 0},
-        {"nearest mass over class", {q, q + tolerance * 0.75}, {1, 3}, q, 1},
+        {"higher class over nearest mass", {q, q + tolerance * 0.75}, {1, 3}, q, 3},
         {"outside higher class", {q, q + tolerance * 1.5}, {2, 3}, q, 2},
-        {"distinct nearby masses", {q, q + tolerance * 0.25, q + tolerance * 0.5}, {1, 2, 3}, q, 1},
+        {"distinct nearby masses", {q, q + tolerance * 0.25, q + tolerance * 0.5}, {1, 2, 3}, q, 3},
         {"class zero is unscored", {q}, {0}, q, 0},
-        {"nearest zero class", {q, q + tolerance * 0.5}, {0, 1}, q, 0},
+        {"nearest zero class", {q, q + tolerance * 0.5}, {0, 1}, q, 1},
         {"same class candidates", {q - tolerance * 0.5, q}, {2, 2}, q, 2},
         {"large mass", {8192.0}, {2}, 8192.0, 2},
         {"zero mass", {0.0}, {1}, 0.0, 1},
@@ -117,7 +127,7 @@ void checkQueries(double tolerance, int classCount) {
     params.size = cases.size(); params.chargeStride = 2;
     for (int repeat = 0; repeat < 2; ++repeat) {
         mvh_rt_gpu::prepare(hostScans, scans.p, peaks.p, classes.p, peaks.n,
-                            mvh_rt_gpu::GeometryKind::Spheres, cfg);
+                            mvh_rt_gpu::GeometryKind::Spheres, cfg, precursorMetadata(hostScans));
         mvh_rt_gpu::launch(params);
         synced();
         std::vector<Result> actual;
@@ -132,7 +142,7 @@ void checkQueries(double tolerance, int classCount) {
                 const int count = hostScans[i].counts[cls - 1];
                 const double expected = (table[1000] - table[999]) - (table[count] - table[count - 1]);
                 if (std::abs(result.score - expected) > 1e-12)
-                    throw std::runtime_error("Wrong nearest-peak MVH score: " + cases[i].name);
+                    throw std::runtime_error("Wrong class-priority MVH score: " + cases[i].name);
             }
         }
     }
@@ -141,7 +151,7 @@ void checkQueries(double tolerance, int classCount) {
         auto changed = cfg;
         changed.fragmentTolerance *= 2;
         mvh_rt_gpu::prepare(hostScans, scans.p, peaks.p, classes.p, peaks.n,
-                            mvh_rt_gpu::GeometryKind::Spheres, changed);
+                            mvh_rt_gpu::GeometryKind::Spheres, changed, precursorMetadata(hostScans));
     } catch (const std::runtime_error &) { rejected = true; }
     if (!rejected) throw std::runtime_error("Stale sphere radius was reused");
     rejected = false;
@@ -158,7 +168,7 @@ void checkQueries(double tolerance, int classCount) {
     rejected = false;
     try {
         mvh_rt_gpu::prepare(hostScans, scans.p, peaks.p, classes.p, peaks.n,
-                            mvh_rt_gpu::GeometryKind::Spheres, params.cfg);
+                            mvh_rt_gpu::GeometryKind::Spheres, params.cfg, precursorMetadata(hostScans));
     } catch (const std::runtime_error &) { rejected = true; }
     if (!rejected) throw std::runtime_error("GAS reused with a changed class range");
     mvh_rt_gpu::reset();
@@ -168,19 +178,21 @@ void checkQueries(double tolerance, int classCount) {
         rejected = false;
         try {
             mvh_rt_gpu::prepare(hostScans, scans.p, peaks.p, classes.p, peaks.n,
-                                mvh_rt_gpu::GeometryKind::Spheres, invalid);
+                                mvh_rt_gpu::GeometryKind::Spheres, invalid, precursorMetadata(hostScans));
         } catch (const std::runtime_error &) { rejected = true; }
         if (!rejected) throw std::runtime_error("Invalid radius was accepted");
     }
-    std::cout << "PASS: split sphere layout/nearest mass/boundary copies/zero class/reuse, queries="
+    std::cout << "PASS: split sphere layout/class priority/boundary copies/zero class/reuse, queries="
               << cases.size() << " classes=" << classCount << " radius=" << tolerance << '\n';
 }
 }
 
 int main() {
     try {
-        for (int classCount : {3, 4})
-            for (double tolerance : {0.125, 0.01}) checkQueries(tolerance, classCount);
+        for (int k : {1, 2, 8, 32}) {
+            mvh_rt_gpu::setScanGroupSize(k);
+            for (double tolerance : {0.125, 0.01}) checkQueries(tolerance, 3);
+        }
         return 0;
     } catch (const std::exception &error) {
         mvh_rt_gpu::reset();

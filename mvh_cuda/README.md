@@ -122,7 +122,7 @@ triangle 使用实际 RT 评分结果。构建、数据路径和验证范围见 
 
 需要量化 RT 对 MVH 分数及最终 top 候选的影响时，使用 [评分影响验证脚本](../MVH_RT/gpu_bridge/README.md#用-mvh-分数和最终-top-候选评估差异)。`--score-impact` 为显式诊断开关，默认关闭，诊断耗时不作性能指标。
 
-实验 RT 构建可选 `--match-backend rt-custom`，当前采用整数/小数拆分坐标内置 sphere 和沿 −z 的 closest-hit，保留原有两个三角形后端及默认 CUDA 路径。实现与验证说明见 [自定义匹配后端](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
+实验 RT 构建可选 `--match-backend rt-custom --rt-scan-group-size K`：保留 double 整数/小数拆分 sphere，按最小前体假设中性质量分组，每组最多 K 张 scan，class 1/2/3 合并 GAS。CUDA 在 batch 内复用理论峰，any-hit 完整收集后 CUDA 归约，优先 class 3 → 2 → 1。`--rt-workspace-mib` 控制局部工作区。规则与验证见 [CUSTOM_MATCHING.md](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md)。
 
 This branch retains only run-level timing and ordinary counters; application NVTX
 and fine-grained timers have been removed. See [timing and build contract](PROFILING.md).

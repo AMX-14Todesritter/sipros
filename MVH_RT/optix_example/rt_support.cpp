@@ -6,6 +6,7 @@
 #include <optix_stack_size.h>
 
 #include <fstream>
+#include <cstdlib>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
@@ -34,7 +35,7 @@ void initializeOptix(OptixObjects &objects) {
     OptixDeviceContextOptions options{};
     options.logCallbackFunction = logCallback;
     options.logCallbackLevel = 3;
-    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_OFF;
+    options.validationMode = std::getenv("SIPROS_OPTIX_DEBUG") ? OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL : OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_OFF;
     checkOptix(optixDeviceContextCreate(nullptr, &options, &objects.context));
 }
 
@@ -116,7 +117,7 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixProgramGro
     return group;
 }
 
-void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced, PrimitiveKind primitive) {
+void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanced, PrimitiveKind primitive, bool anyHit) {
     const bool spheres = primitive == PrimitiveKind::Sphere;
     std::ifstream stream(ptxPath, std::ios::binary);
     if (!stream) throw std::runtime_error("Cannot open PTX: " + ptxPath.string());
@@ -129,6 +130,8 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
                                                     : OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     compileOptions.numPayloadValues = 2; // Peak index and optional distance; sphere uses the first slot.
     compileOptions.numAttributeValues = 2;
+    if (std::getenv("SIPROS_OPTIX_DEBUG"))
+        compileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH;
     compileOptions.pipelineLaunchParamsVariableName = "params";
     compileOptions.usesPrimitiveTypeFlags = spheres ? OPTIX_PRIMITIVE_TYPE_FLAGS_SPHERE
                                                    : OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
@@ -164,6 +167,12 @@ void createPipeline(OptixObjects &objects, const fs::path &ptxPath, bool instanc
     description.hitgroup.entryFunctionNameIS = nullptr;
     description.hitgroup.moduleCH = objects.module;
     description.hitgroup.entryFunctionNameCH = "__closesthit__record";
+    if (anyHit) {
+        description.hitgroup.moduleCH = nullptr;
+        description.hitgroup.entryFunctionNameCH = nullptr;
+        description.hitgroup.moduleAH = objects.module;
+        description.hitgroup.entryFunctionNameAH = "__anyhit__record";
+    }
     objects.hit = createProgramGroup(objects.context, description);
 
     OptixProgramGroup groups[] = {objects.raygen, objects.miss, objects.hit};

@@ -80,7 +80,7 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/device.cu" -o "${GPU_RT_PTX}"
     DEPENDS "${GPU_RT_DIR}/device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh cuda/sequence_ions.cuh VERBATIM)
   add_custom_target(mvh_gpu_rt_ptx DEPENDS "${GPU_RT_PTX}")
   set(GPU_RT_CUSTOM_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_custom.ptx")
   add_custom_command(OUTPUT "${GPU_RT_CUSTOM_PTX}"
@@ -89,14 +89,15 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_CUSTOM_PTX}"
     DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh cuda/sequence_ions.cuh VERBATIM)
   add_custom_target(mvh_gpu_rt_custom_ptx DEPENDS "${GPU_RT_CUSTOM_PTX}")
   add_library(mvh_gpu_rt STATIC "${GPU_RT_DIR}/bridge.cpp"
     "${GPU_RT_DIR}/sphere_backend.cpp" "${GPU_RT_DIR}/triangle_backend.cpp"
     "${GPU_RT_DIR}/scene_resources.cpp" "${GPU_RT_DIR}/geometry.cu"
-    "${GPU_RT_DIR}/custom_geometry.cu")
+    "${GPU_RT_DIR}/custom_geometry.cu" "${GPU_RT_DIR}/shared_theory.cu")
   target_include_directories(mvh_gpu_rt PUBLIC "${GPU_RT_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/cuda")
   target_link_libraries(mvh_gpu_rt PUBLIC mvh_rt_support)
+  target_compile_options(mvh_gpu_rt PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
   target_compile_definitions(mvh_gpu_rt PRIVATE MVH_GPU_RT_PTX_PATH="${GPU_RT_PTX}"
     MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_CUSTOM_PTX}")
   add_dependencies(mvh_gpu_rt mvh_gpu_rt_ptx mvh_gpu_rt_custom_ptx)
@@ -110,6 +111,9 @@ if(MVH_CUDA_ENABLE_RT)
   add_executable(mvh_gpu_rt_sphere_contract "${GPU_RT_DIR}/custom_contract.cpp")
   target_link_libraries(mvh_gpu_rt_sphere_contract PRIVATE mvh_gpu_rt)
   add_test(NAME gpu_rt_sphere_layout COMMAND mvh_gpu_rt_sphere_contract)
+  add_executable(mvh_gpu_rt_shared_contract "${GPU_RT_DIR}/shared_contract.cpp")
+  target_link_libraries(mvh_gpu_rt_shared_contract PRIVATE mvh_gpu_rt)
+  add_test(NAME gpu_rt_shared_anyhit COMMAND mvh_gpu_rt_shared_contract)
   add_test(NAME score_impact_end_to_end COMMAND ${Python3_EXECUTABLE} -B
     "${GPU_RT_DIR}/check_score_impact.py" --binary $<TARGET_FILE:sipros_mvh_cuda>)
   add_test(NAME score_impact_report_semantics COMMAND ${Python3_EXECUTABLE} -B
@@ -117,6 +121,10 @@ if(MVH_CUDA_ENABLE_RT)
   add_test(NAME gpu_rt_integration COMMAND ${Python3_EXECUTABLE}
     "${GPU_RT_DIR}/check_integration.py" --binary $<TARGET_FILE:sipros_mvh_cuda>
     --root "${SIPROS_ROOT}")
+  add_test(NAME gpu_rt_without_ion_cache COMMAND ${Python3_EXECUTABLE}
+    "${GPU_RT_DIR}/check_integration.py" --binary $<TARGET_FILE:sipros_mvh_cuda>
+    --root "${SIPROS_ROOT}")
+  set_tests_properties(gpu_rt_without_ion_cache PROPERTIES ENVIRONMENT "SIPROS_RT_DISABLE_ION_CACHE=1")
 
 endif()
 

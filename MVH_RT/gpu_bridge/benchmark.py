@@ -21,6 +21,8 @@ p = argparse.ArgumentParser()
 p.add_argument('--root', type=Path, required=True)
 p.add_argument('--output', type=Path, help='New output directory (default: project output tree)')
 p.add_argument('--batch', type=int, default=4000000)
+p.add_argument('--rt-scan-group-size', type=int, default=8)
+p.add_argument('--rt-workspace-mib', type=int, default=512)
 p.add_argument('--scans', type=Path)
 p.add_argument('--config', type=Path)
 p.add_argument('--fasta', type=Path, help='FASTA override; default is raw/Ecoli.fasta')
@@ -30,8 +32,8 @@ p.add_argument('--repeats', type=int, default=3)
 p.add_argument('--order', choices=['rotate', 'alternate'], default='rotate',
                help='rotate swaps the starting backend each round; alternate repeats the listed backend order')
 a = p.parse_args()
-if a.repeats < 1 or a.batch < 1:
-    p.error('--repeats and --batch must be positive')
+if a.repeats < 1 or a.batch < 1 or a.rt_scan_group_size < 1 or a.rt_workspace_mib < 16:
+    p.error('positive repeats/batch/K and workspace >=16 MiB required')
 if len(set(a.backends)) != len(a.backends):
     p.error('duplicate backends are not allowed')
 a.output = resolve_output(a.output, "benchmarks", "gpu_bridge", "benchmark", project_root=a.root)
@@ -119,6 +121,9 @@ try:
                        '-c', str(inputs[1]), '-fasta', str(inputs[2]), '-o', str(output), '-t', '4', '--peptide-batch-size', str(a.batch)]
             if backend != 'cpu':
                 command += ['--match-backend', backend]
+                if backend == 'rt-custom':
+                    command += ['--rt-scan-group-size', str(a.rt_scan_group_size),
+                                '--rt-workspace-mib', str(a.rt_workspace_mib)]
             before = gpu_memory()
             peak_gpu, peak_rss, hwm = before, 0, 0
             samples = 0

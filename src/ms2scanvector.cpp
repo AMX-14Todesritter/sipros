@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include "ms2scanvector.h"
 #include "SiprosReader.h"
 
@@ -59,9 +60,7 @@ bool MS2ScanVector::ReadFT2File()
 	int tmp_charge;
 	double tmp_mz, tmp_intensity;
 
-	// for DIA precursor reading in isolation window
-	int parentCharge = 0;
-	double parentMZ = 0;
+	bool precursorChargeRead = false;
 
 	bReVal = ft2_stream.is_open();
 	if (bReVal)
@@ -140,32 +139,19 @@ bool MS2ScanVector::ReadFT2File()
 				// in case no Z Line
 				pMS2Scan->iParentChargeState = 0;
 				pMS2Scan->dParentNeutralMass = 0;
+				precursorChargeRead = false;
 			}
 			else if (sline.at(0) == 'Z')
 			{
+				// Use only the first reported charge; S owns the precursor m/z.
+				if (precursorChargeRead) continue;
+				precursorChargeRead = true;
 				TokenVector words(sline, " \r\t\n");
 				input.clear();
-				input.str(words[1]);
-				input >> pMS2Scan->iParentChargeState;
+				input.str(words.size() > 1 ? words[1] : "");
+				if (!(input >> pMS2Scan->iParentChargeState) || pMS2Scan->iParentChargeState <= 0)
+					throw std::runtime_error("Invalid instrument precursor charge in scan " + std::to_string(pMS2Scan->iScanId));
 				input.clear();
-				// input.str(words[2]);
-				// input >> pMS2Scan->dParentNeutralMass;
-				// input.clear();
-
-				// for DIA precursor and wide window DDA reading in isolation window
-				parentCharge = 0;
-				parentMZ = 0;
-				for (size_t i = 3; i + 1 < words.size(); i += 2)
-				{
-					input.str(words[i]);
-					input >> parentCharge;
-					pMS2Scan->iParentChargeStates.push_back(parentCharge);
-					input.clear();
-					input.str(words[i + 1]);
-					input >> parentMZ;
-					pMS2Scan->dParentMZs.push_back(parentMZ);
-					input.clear();
-				}
 			}
 			else if (sline.at(0) == 'I')
 			{
@@ -276,47 +262,11 @@ bool MS2ScanVector::loadFT2File()
 		vpPrecursorMasses.reserve(vpAllMS2Scans.size());
 		for (size_t i = 0; i < vpAllMS2Scans.size(); i++)
 		{
-			if (vpAllMS2Scans[i]->iParentChargeState > 0)
-			{
-				parentNeutralMass = vpAllMS2Scans[i]->dParentMZ *
-										vpAllMS2Scans[i]->iParentChargeState -
-									vpAllMS2Scans[i]->iParentChargeState *
-										ProNovoConfig::getProtonMass();
-				vAllPrecursorMassChargeMS2ScanPtrTuples.push_back({parentNeutralMass,
-																   vpAllMS2Scans[i]->iParentChargeState,
-																   vpAllMS2Scans[i]});
-				// ignore peak at isolation window center
-				for (size_t j = 0; j < vpAllMS2Scans[i]->iParentChargeStates.size(); j++)
-				{
-					if (abs(vpAllMS2Scans[i]->dParentMZs[j] * vpAllMS2Scans[i]->iParentChargeStates[j] -
-							vpAllMS2Scans[i]->dParentMZ * vpAllMS2Scans[i]->iParentChargeState) >
-						ProNovoConfig::getMassAccuracyParentIon())
-					{
-						parentNeutralMass = vpAllMS2Scans[i]->dParentMZs[j] *
-												vpAllMS2Scans[i]->iParentChargeStates[j] -
-											vpAllMS2Scans[i]->iParentChargeStates[j] *
-												ProNovoConfig::getProtonMass();
-						vAllPrecursorMassChargeMS2ScanPtrTuples.push_back({parentNeutralMass,
-																		   vpAllMS2Scans[i]->iParentChargeStates[j],
-																		   vpAllMS2Scans[i]});
-					}
-				}
-			}
-			else
-			{
-				// add a charge threshold for scan preprocess and score function
-				vpAllMS2Scans[i]->iParentChargeState = 3;
-				for (size_t j = 0; j < vpAllMS2Scans[i]->iParentChargeStates.size(); j++)
-				{
-					parentNeutralMass = vpAllMS2Scans[i]->dParentMZs[j] *
-											vpAllMS2Scans[i]->iParentChargeStates[j] -
-										vpAllMS2Scans[i]->iParentChargeStates[j] *
-											ProNovoConfig::getProtonMass();
-					vAllPrecursorMassChargeMS2ScanPtrTuples.push_back({parentNeutralMass,
-																	   vpAllMS2Scans[i]->iParentChargeStates[j],
-																	   vpAllMS2Scans[i]});
-				}
-			}
+			MS2Scan *scan = vpAllMS2Scans[i];
+			parentNeutralMass = scan->dParentMZ * scan->iParentChargeState -
+				scan->iParentChargeState * ProNovoConfig::getProtonMass();
+			vAllPrecursorMassChargeMS2ScanPtrTuples.push_back(
+				{parentNeutralMass, scan->iParentChargeState, scan});
 		}
 		std::sort(vAllPrecursorMassChargeMS2ScanPtrTuples.begin(), vAllPrecursorMassChargeMS2ScanPtrTuples.end(),
 				  [](const std::tuple<double, int, MS2Scan *> &a, const std::tuple<double, int, MS2Scan *> &b)
@@ -435,19 +385,11 @@ bool MS2ScanVector::myless(MS2Scan *pMS2Scan1, MS2Scan *pMS2Scan2)
 
 void MS2ScanVector::saveFT2Scan(MS2Scan *pMS2Scan)
 {
-	// for DIA with precursors' charge and mz in isolation windows
-	if (pMS2Scan->iParentChargeState == 0)
-	{
-		if (pMS2Scan->iParentChargeStates.size() > 0)
-			vpAllMS2Scans.push_back(pMS2Scan);
-	}
-	// for new DDA raw
-	else
-	{
-		pMS2Scan->dParentNeutralMass = pMS2Scan->dParentMZ * pMS2Scan->iParentChargeState -
-									   pMS2Scan->iParentChargeState * ProNovoConfig::getProtonMass();
-		vpAllMS2Scans.push_back(pMS2Scan);
-	}
+	if (pMS2Scan->iParentChargeState <= 0 || !(pMS2Scan->dParentMZ > 0))
+		throw std::runtime_error("Missing or invalid instrument precursor in scan " + std::to_string(pMS2Scan->iScanId));
+	pMS2Scan->dParentNeutralMass = pMS2Scan->dParentMZ * pMS2Scan->iParentChargeState -
+		pMS2Scan->iParentChargeState * ProNovoConfig::getProtonMass();
+	vpAllMS2Scans.push_back(pMS2Scan);
 }
 
 void MS2ScanVector::saveMzmlScan(MS2Scan *pMS2Scan)

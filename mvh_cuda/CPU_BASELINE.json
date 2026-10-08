@@ -4,6 +4,7 @@
     "CLASS_EXTRACTION_VALIDATION.md": "c1eafa0c897c1014e9db871b030ecf7d5c53dd0aa12c5e5fad3a7ad7f3ec80a3",
     "CMakeLists.txt": "e2f580256968662ad70f259e84e0bbe73de596e01053491640d575c2d644f677",
     "extraction.json": "a1449b8ed0e49a5e0ea6dc5a78b61e83892573506fd79a4a2c2ccdc9fc78b707",
+<<<<<<< HEAD
     "README.md": "c9e925c4e03556e357ee3914091d129d26eb93e88a871cdf7ea6c38936da2175",
     "VALIDATION.md": "147ea83046771838fc26894f6259c50af4159fd31bc321dedf1349486b6924e4",
     "tests/source_methods.py": "c8d80aadde20ad1ee6e1797e697bf4892951458f8c0d65e99c2aa561a97182be",
@@ -15,6 +16,19 @@
     "tests/data/sample.ft2": "946f49f1dbbe29bb0f20133b562159805a0f4e499a4ea328ced7f781d054925c",
     "include/mvh_scan_vector.h": "c90398064c12810c0f4722a1edbd5b7bb3a712767dad754f4dda4746c307bc07",
     "src/spectrum_input.cpp": "22e72f59084775e282956516b3af490563f3ed7659c3807da26ffe39fae43f95",
+=======
+    "README.md": "3e1a9cf038b0cc8633fa63a876aff74b3ee6ac025466d26dd6aa3b0d58cea346",
+    "VALIDATION.md": "147ea83046771838fc26894f6259c50af4159fd31bc321dedf1349486b6924e4",
+    "tests/source_methods.py": "c8d80aadde20ad1ee6e1797e697bf4892951458f8c0d65e99c2aa561a97182be",
+    "tests/verify_original.py": "42c21249fee9c8c65ee34ab419e82d2e3da87a6f1965c1b5753d3e52812b8e30",
+    "tests/check_run.py": "5e767b7bd046b3b8a1ee6c28c84c3b15a207aae771ab1044bda9c1adf9c21d61",
+    "tests/verify_extraction.py": "d9ac193e8ea01478644e5682f07552cf82abb09a0252fb32eca61ed399451819",
+    "tests/data/search.cfg": "04ba2a4c120ac7207f34fce774169ced522f05e53f59398d955029705cf198e6",
+    "tests/data/proteins.fasta": "fae8a22134d309dabe516c3b96cf9adf9d4205d55b882348f1cfa3de41e7106f",
+    "tests/data/sample.ft2": "946f49f1dbbe29bb0f20133b562159805a0f4e499a4ea328ced7f781d054925c",
+    "include/mvh_scan_vector.h": "1784fc3a72d671be8474f3a8de1b03fc6681eee6d17196f487a0da30b2fb445a",
+    "src/spectrum_input.cpp": "a406c81990a496a3147e842474db940a0a1a6d40c23625b0200c8cc7b1b42e7f",
+>>>>>>> 3b5bec1 (candidate stratege update)
     "src/mvh_scan_vector.cpp": "121404f07c163960eebb065485ba8829e6d1aa6e963c19c0cbb729fe738871fa",
     "src/database_search.cpp": "60c12ebe30c4fc33f0eeda55c92b27e4b266c878c0a9f1cc8646b61b75db4e1c",
     "app/runner.cpp": "905975255d715b4ccf0f8bbc1d5d58a375e41c6b7f9ad7d22ead08cea4ead97d",
@@ -72,5 +86,17 @@
     "original/src/ms2scan.cpp": "PeakList::findNear selects the nearest mass strictly within tolerance, including class 0; other upstream methods unchanged.",
     "tests/verify_original.py": "Allow only the intentional PeakList::findNear change and require CPU/CUDA reference implementations to agree."
   },
+<<<<<<< HEAD
   "working_tree_adjustments": "Nearest-mass matching synchronized with rtMVH_v0.0; profiling instrumentation retained."
+=======
+  "working_tree_adjustments": "Nearest-mass matching and runtime generated-peptide batch size; upstream method identity checked independently.",
+  "intentional_updates": {
+    "instrument_precursor": "S precursor m/z + first Z charge only; no extra FT2 hypotheses",
+    "files": [
+      "README.md",
+      "src/spectrum_input.cpp",
+      "tests/verify_extraction.py"
+    ]
+  }
+>>>>>>> 3b5bec1 (candidate stratege update)
 }

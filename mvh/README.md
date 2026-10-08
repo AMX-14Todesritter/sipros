@@ -100,3 +100,13 @@ build/mvh/bin/sipros_mvh \
 `verify_original.py` 检查 24 个原始对照/依赖文件与 Git 来源逐字节一致。`verify_extraction.py` 检查 21 个提取的方法定义，除类名外逐字一致，并确认入口使用直接调用。`check_run.py` 检查有效匹配/PTM、单线程和四线程一致、无匹配、跳过谱图，以及无效线程数和拒绝覆盖输出。测试使用保留的 scan 1004 单样本，仅验证集成行为；不能将它作为完整数据集的性能基准。
 
 独立类改造后的验证见 `CLASS_EXTRACTION_VALIDATION.md`；此前原样移植记录见 `VALIDATION.md`。旧 A/B/C 代码备份仍在父项目 `.reset-backup/`，不参加当前构建。
+
+### Instrument-only FT2 precursor
+
+FT2 input uses the precursor m/z from the S line and the charge from the first
+Z line's first item. The remaining Z fields and additional Z lines are ignored.
+Each scan contributes exactly one neutral precursor mass: z * (m/z - proton mass).
+Missing or nonpositive primary charge is an input error; no alternative charge
+or isolation-window precursor is inferred. This changes candidate lists and
+search results for files containing extra precursor hypotheses. MzML input
+retains its existing behavior.

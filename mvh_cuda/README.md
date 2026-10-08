@@ -300,9 +300,31 @@ and do not measure this corrected implementation. Rebuild before new profiling.
 
 ## Profiling integration of GPU workflow changes
 
+<<<<<<< HEAD
 The profiling branch uses the same nearest-mass matching as `rtMVH_v0.0` and retains NVTX ranges.
 Continuous input packing, block-based GPU peptide generation and final result
 restoration now also have NVTX ranges; there is no per-peptide NVTX annotation.
 Build `build/mvh_rt/profile_enabled` with `MVH_ENABLE_PROFILING=ON` and
 `MVH_ENABLE_FLOW_COUNTERS=OFF` before profiling this integrated version. Historical
 binaries in other build directories do not represent this merge.
+=======
+`--candidate-reuse-stats` prints an exact per-batch histogram of candidate counts
+for each observed `(batch peptide ID, precursor charge)` pair. `[REUSE histogram]`
+rows contain charge, uses and number of groups; `[REUSE batch]` verifies that the
+weighted histogram equals the assignment association count. Unused pairs are
+excluded. Duplicate precursor hypotheses and candidates on skipped scans remain
+included, so this is candidate reuse opportunity, not distinct-scan counts or
+actual ray counts. Equal sequences with different peptide IDs remain separate.
+The diagnostic is off by default, runs before scan sorting, and does not change
+scoring. Its runtime must not be treated as an uninstrumented benchmark.
+
+### Instrument-only FT2 precursor
+
+FT2 input uses the precursor m/z from the S line and the charge from the first
+Z line's first item. The remaining Z fields and additional Z lines are ignored.
+Each scan contributes exactly one neutral precursor mass: z * (m/z - proton mass).
+Missing or nonpositive primary charge is an input error; no alternative charge
+or isolation-window precursor is inferred. This changes candidate lists and
+search results for files containing extra precursor hypotheses. MzML input
+retains its existing behavior.
+>>>>>>> 3b5bec1 (candidate stratege update)

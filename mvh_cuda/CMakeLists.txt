@@ -172,3 +172,8 @@ add_executable(generation_contract tests/generation_contract.cpp)
 target_link_libraries(generation_contract PRIVATE mvh_original)
 add_test(NAME cuda_generation_contract COMMAND ${Python3_EXECUTABLE} -B
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_generation.py" --binary $<TARGET_FILE:generation_contract>)
+
+add_executable(instrument_precursor_contract tests/instrument_precursor_contract.cpp)
+target_link_libraries(instrument_precursor_contract PRIVATE mvh_original)
+add_test(NAME instrument_precursor_contract COMMAND instrument_precursor_contract
+  "${SIPROS_ROOT}/experiments/Regular.cfg" "${CMAKE_BINARY_DIR}")

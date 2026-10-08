@@ -299,3 +299,13 @@ included, so this is candidate reuse opportunity, not distinct-scan counts or
 actual ray counts. Equal sequences with different peptide IDs remain separate.
 The diagnostic is off by default, runs before scan sorting, and does not change
 scoring. Its runtime must not be treated as an uninstrumented benchmark.
+
+### Instrument-only FT2 precursor
+
+FT2 input uses the precursor m/z from the S line and the charge from the first
+Z line's first item. The remaining Z fields and additional Z lines are ignored.
+Each scan contributes exactly one neutral precursor mass: z * (m/z - proton mass).
+Missing or nonpositive primary charge is an input error; no alternative charge
+or isolation-window precursor is inferred. This changes candidate lists and
+search results for files containing extra precursor hypotheses. MzML input
+retains its existing behavior.

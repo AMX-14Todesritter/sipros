@@ -10,6 +10,11 @@ count=0
 for filename,names in spec['files'].items():
     actual=methods((m/filename).read_text(),new)
     expected={n.replace(old,new):original[n].replace(old,new) for n in names}
+    if filename == 'src/spectrum_input.cpp':
+        # Authorized instrument-only FT2 policy; keep all other extracted methods checked.
+        instrument = methods((m.parent/'src/ms2scanvector.cpp').read_text(), old)
+        for name in ('ReadFT2File', 'loadFT2File', 'saveFT2Scan'):
+            expected[name] = instrument[name].replace(old, new)
     if filename == 'src/database_search.cpp':
         # Authorized runtime generated-peptide batching; every other byte remains checked.
         body = actual['searchDatabaseMvh']

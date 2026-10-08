@@ -40,7 +40,11 @@ __device__ void saveScoreSort(Top *a,int n){
 // Select the nearest peak within strict tolerance, regardless of its class.
 // Equal distances retain the first encountered peak; class 0 remains unscored.
 __device__ int findNear(double mz, double tolerance, const Scan &scan,
-                        const double *peaks, const int *classes, const short *hub) {
+                        const double *peaks, const int *classes, const short *hub
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+                        , uint64_t *bucketVisits = nullptr, uint64_t *peakChecks = nullptr
+#endif
+                        ) {
     if (!scan.peaks) return 0;
 
     const int lower = int(mz - tolerance);
@@ -53,11 +57,17 @@ __device__ int findNear(double mz, double tolerance, const Scan &scan,
     int bestClass = -1;
     double bestDistance = tolerance;
     for (int bucket = firstBucket; bucket <= lastBucket; ++bucket) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        if (bucketVisits) ++*bucketVisits;
+#endif
         const int first = hub[scan.hubOffset + 2 * bucket];
         const int last = hub[scan.hubOffset + 2 * bucket + 1];
         if (first == -1) continue;
 
         for (int i = first; i < last; ++i) {
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+            if (peakChecks) ++*peakChecks;
+#endif
             const auto peakIndex = scan.peakOffset + i;
             const int candidateClass = classes[peakIndex];
 
@@ -86,6 +96,8 @@ struct IonCounter {
     int key[MaxClasses+1],predicted=0,matched=0;
 #ifdef MVH_ENABLE_FLOW_COUNTERS
     uint64_t offered=0, geometricHits=0;
+    uint64_t searchCalls=0, bucketVisits=0, peakChecks=0;
+    uint64_t rtTraces=0, rtClosestHits=0, rtMisses=0;
     // Observer only: existence of ANY retained experimental peak strictly inside
     // the configured double-precision tolerance, including class 0. This does
     // not replace the backend matcher or affect its class selection/score.
@@ -107,7 +119,13 @@ struct IonCounter {
         observe(mz);
 #endif
         if(mz<scan.lower||mz>scan.upper)return;++predicted;
+        #ifdef MVH_ENABLE_FLOW_COUNTERS
+        ++searchCalls;
+        int cls=findNear(mz,cfg.fragmentTolerance,scan,peaks,classes,hub,
+                         &bucketVisits,&peakChecks);
+#else
         int cls=findNear(mz,cfg.fragmentTolerance,scan,peaks,classes,hub);
+#endif
         if(cls>0){++key[cls-1];++matched;}else ++key[cfg.classes];
     }
 };
@@ -178,6 +196,15 @@ __device__ Result scoreCandidate(int index,
                                       candidate.charge, cfg, ions);
     }
 #ifdef MVH_ENABLE_FLOW_COUNTERS
+    flowAdd(cfg,index,mvh_flow::SearchCalls,ions.searchCalls);
+    flowAdd(cfg,index,mvh_flow::BucketVisits,ions.bucketVisits);
+    flowAdd(cfg,index,mvh_flow::PeakChecks,ions.peakChecks);
+    flowAdd(cfg,index,mvh_flow::RtTraces,ions.rtTraces);
+    flowAdd(cfg,index,mvh_flow::RtClosestHits,ions.rtClosestHits);
+    flowAdd(cfg,index,mvh_flow::RtMisses,ions.rtMisses);
+    flowAdd(cfg,index,mvh_flow::BackendZeroQueries,ions.predicted-ions.matched);
+    flowAdd(cfg,index,mvh_flow::InvalidQueries,valid ? 0 : ions.predicted);
+    flowAdd(cfg,index,mvh_flow::InvalidHits,valid ? 0 : ions.matched);
     flowAdd(cfg,index,mvh_flow::Entered,1);
     flowAdd(cfg,index,mvh_flow::OfferedIons,ions.offered);
     flowAdd(cfg,index,mvh_flow::Queries,ions.predicted);

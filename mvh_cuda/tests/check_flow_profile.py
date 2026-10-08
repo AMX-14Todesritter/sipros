@@ -11,6 +11,13 @@ with tempfile.TemporaryDirectory() as tmp:
   c={k:int(v) for k,v in list(csv.reader((out/'flow_counters.tsv').open(),delimiter='\t'))[1:]}
   assert c['total_precursor_associations']==c['total_associations_entering_fragment_stage']+c['total_associations_rejected_before_fragment_stage']
   assert c['total_fragment_queries']==c['total_fragment_hits']+c['total_fragment_misses']
+  if backend == 'cuda':
+   assert c['cuda_search_calls'] == c['total_fragment_queries']
+   assert c['rt_trace_calls'] == 0
+  else:
+   assert c['rt_trace_calls'] <= c['total_fragment_queries']
+   assert c['rt_closest_hit_calls'] + c['rt_miss_calls'] == c['rt_trace_calls']
+   assert c['cuda_search_calls'] == 0
   assert c['total_associations_entering_fragment_stage']==c['total_associations_with_at_least_one_fragment_hit']+c['total_associations_with_zero_fragment_hits']
   assert c['total_ions_offered_to_associations']==c['total_fragment_queries']+c['total_ions_outside_scan_range']
   assert c['total_mvh_scores_computed']==c['total_associations_entering_mvh_scoring']

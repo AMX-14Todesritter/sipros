@@ -1,8 +1,5 @@
-<<<<<<< HEAD
 #include "profiling.h"
-=======
 #include <stdexcept>
->>>>>>> 3b5bec1 (candidate stratege update)
 #include "mvh_scan_vector.h"
 #include "engine.h"
 #include "SiprosReader.h"

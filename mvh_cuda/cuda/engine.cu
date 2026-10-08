@@ -998,6 +998,21 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     add("total_theoretical_fragment_ions_generated",v[DirectIons]+v[CacheCountIons]+v[CacheStoreIons]);
     add("total_direct_generated_ions",v[DirectIons]);
     add("total_cache_count_ions",v[CacheCountIons]);add("total_cache_stored_ions",v[CacheStoreIons]);
+    add("cuda_search_calls",v[SearchCalls]);add("cuda_bucket_visits",v[BucketVisits]);
+    add("cuda_peak_checks",v[PeakChecks]);add("rt_trace_calls",v[RtTraces]);
+    add("rt_closest_hit_calls",v[RtClosestHits]);add("rt_miss_calls",v[RtMisses]);
+    add("backend_unscored_queries",v[BackendZeroQueries]);
+    uint64_t reportedQueries=0;
+    for (const auto &scanCount : output.counts) reportedQueries += scanCount.predicted;
+    std::cout << "[SEARCH WORK batch] queries=" << v[Queries]
+              << " cuda_calls=" << v[SearchCalls] << " buckets=" << v[BucketVisits]
+              << " peak_checks=" << v[PeakChecks] << " traces=" << v[RtTraces]
+              << " closest_hits=" << v[RtClosestHits] << " misses=" << v[RtMisses]
+              << " scored_hits=" << v[ScoredHits]
+              << " unscored=" << v[BackendZeroQueries]
+              << " invalid_queries=" << v[InvalidQueries]
+              << " invalid_hits=" << v[InvalidHits]
+              << " reported_queries=" << reportedQueries << std::endl;
     uint64_t accepted=0,merged=0;
     for(const auto &e:output.events){accepted+=e.result.status==ResultAccepted;merged+=e.result.status==ResultMerged;}
     add("total_candidates_retained_after_mvh",accepted);

@@ -300,14 +300,14 @@ and do not measure this corrected implementation. Rebuild before new profiling.
 
 ## Profiling integration of GPU workflow changes
 
-<<<<<<< HEAD
+
 The profiling branch uses the same nearest-mass matching as `rtMVH_v0.0` and retains NVTX ranges.
 Continuous input packing, block-based GPU peptide generation and final result
 restoration now also have NVTX ranges; there is no per-peptide NVTX annotation.
 Build `build/mvh_rt/profile_enabled` with `MVH_ENABLE_PROFILING=ON` and
 `MVH_ENABLE_FLOW_COUNTERS=OFF` before profiling this integrated version. Historical
 binaries in other build directories do not represent this merge.
-=======
+
 `--candidate-reuse-stats` prints an exact per-batch histogram of candidate counts
 for each observed `(batch peptide ID, precursor charge)` pair. `[REUSE histogram]`
 rows contain charge, uses and number of groups; `[REUSE batch]` verifies that the
@@ -327,4 +327,3 @@ Missing or nonpositive primary charge is an input error; no alternative charge
 or isolation-window precursor is inferred. This changes candidate lists and
 search results for files containing extra precursor hypotheses. MzML input
 retains its existing behavior.
->>>>>>> 3b5bec1 (candidate stratege update)

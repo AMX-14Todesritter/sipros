@@ -44,7 +44,16 @@ struct SphereCounter : mvh_cuda::IonCounter {
         if (mz < scan.lower || mz > scan.upper) return;
         ++predicted;
         const auto handle = params.handles[&scan - params.scans];
+        #ifdef MVH_ENABLE_FLOW_COUNTERS
+        if (handle) ++rtTraces;
+#endif
         const unsigned peakIndex = tracePeak(handle, mz);
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+        if (handle) {
+            if (peakIndex == NoPeak) ++rtMisses;
+            else ++rtClosestHits;
+        }
+#endif
         if (peakIndex == NoPeak) {
             ++key[cfg.classes];
             return;

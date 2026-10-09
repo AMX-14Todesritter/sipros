@@ -69,7 +69,7 @@ def input_paths(args):
     smoke = args.dataset == 'smoke'
     return {
         'scans': (args.scans or (data/'sample.ft2' if smoke else
-                  (ROOT/'raw/marine/ft/OSU_D10_FASP_Elite_03202014_01.FT2' if args.dataset == 'marine' else ROOT/'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2'))).resolve(),
+                  ROOT/'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2')).resolve(),
         'config': (args.config or (data/'search.cfg' if smoke else ROOT/'experiments/Regular.cfg')).resolve(),
         'fasta': (args.fasta or (data/'proteins.fasta' if smoke else
                   ROOT/'raw'/('Marine_fw_3rev.fasta' if args.dataset == 'marine' else 'Ecoli.fasta'))).resolve(),

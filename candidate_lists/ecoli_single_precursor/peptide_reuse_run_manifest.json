@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-09",
+  "mode": "SIPROS_DIAGNOSTIC_ASSIGNMENT_ONLY=1; MVH_ENABLE_FLOW_COUNTERS=ON",
+  "batch_size": 8000000,
+  "database": "raw/Marine_fw_3rev.fasta",
+  "scans": "test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+  "config": "experiments/Regular.cfg",
+  "diagnostic_binary_sha256": "d3780ec1226842a9aa7116f862a7ef093608700f582a53b269de0255fd7e52b8",
+  "source_sha256": {
+    "mvh_cuda/include/flow_host.h": "62c83b21fb44d7d3361a230a1801c21de57b77a53d972751cbc5774ee9441751",
+    "mvh_cuda/cuda/engine.cu": "1aa2ceebd7ffb205ae4e2edd2fbb2d906986b6fedd7f54e8e04f8a630da23580",
+    "mvh_cuda/src/database_search.cpp": "90a5d16b21bb6818c62d273c88282d7a825080486698dcbd1363978d2ddc5c5f",
+    "mvh_cuda/tests/check_flow_profile.py": "dd00a33007d9c5ab8e61cea2ca98f09ed3ef82a3e6a561a96546c25fa36e82b7"
+  },
+  "verification": "full histogram sum and weighted sum agree with earlier search; five contracts passed; histogram identity test passed"
+}

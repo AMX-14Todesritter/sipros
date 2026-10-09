@@ -10,6 +10,9 @@ with tempfile.TemporaryDirectory() as tmp:
   assert r.returncode==0,r.stdout+r.stderr
   c={k:int(v) for k,v in list(csv.reader((out/'flow_counters.tsv').open(),delimiter='\t'))[1:]}
   assert c['total_precursor_associations']==c['total_associations_entering_fragment_stage']+c['total_associations_rejected_before_fragment_stage']
+  reuse={int(k):int(v) for k,v in list(csv.reader((out/'peptide_reuse_histogram.tsv').open(),delimiter='\t'))[1:]}
+  assert sum(reuse.values()) == c['total_peptide_entries']
+  assert sum(k*v for k,v in reuse.items()) == c['total_precursor_associations']
   assert c['total_fragment_queries']==c['total_fragment_hits']+c['total_fragment_misses']
   if backend == 'cuda':
    assert c['cuda_search_calls'] == c['total_fragment_queries']

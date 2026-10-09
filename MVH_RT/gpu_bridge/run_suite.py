@@ -29,7 +29,7 @@ root = Path(__file__).resolve().parents[2]
 data = root / 'mvh_cuda/tests/data'
 smoke = a.dataset == 'smoke'
 fasta = a.fasta or (data/'proteins.fasta' if smoke else root/'raw'/('Marine_fw_3rev.fasta' if a.dataset=='marine' else ('Soil_fw_3rev.fasta' if a.dataset== 'soil' else 'Ecoli.fasta')))
-scans = a.scans or (data/'sample.ft2' if smoke else (root/'raw/marine/ft/OSU_D10_FASP_Elite_03202014_01.FT2' if a.dataset == 'marine' else root/'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2'))
+scans = a.scans or (data/'sample.ft2' if smoke else root/'test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2')
 config = a.config or (data/'search.cfg' if smoke else root/'experiments/Regular.cfg')
 for f in (fasta, scans, config):
     if not f.is_file(): p.error(f'Input missing: {f}')

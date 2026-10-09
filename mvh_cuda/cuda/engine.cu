@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <unordered_map>
@@ -408,6 +409,21 @@ void assignPeptides2Scans(const PeptideBatch &peptides,
 #ifdef MVH_ENABLE_FLOW_COUNTERS
     mvh_flow::totals["total_peptide_entries"] += peptides.size();
     mvh_flow::totals["total_precursor_associations"] += associations;
+    std::vector<uint64_t> perPeptideAssociations;
+    counts.read(perPeptideAssociations);
+    uint64_t histogramAssigned=0;
+    for (int i=0;i<size;++i) {
+        ++mvh_flow::peptideReuseHistogram[perPeptideAssociations[i]];
+        histogramAssigned += perPeptideAssociations[i] != 0;
+    }
+    const char* assignmentOnly=std::getenv("SIPROS_DIAGNOSTIC_ASSIGNMENT_ONLY");
+    if (assignmentOnly && std::strcmp(assignmentOnly,"1")==0) {
+        std::cout << "[ASSIGNMENT histogram] generated=" << size
+                  << " assigned=" << histogramAssigned
+                  << " associations=" << associations << std::endl;
+        return;
+    }
+
 #endif
     require(associations <= size_t(std::numeric_limits<int>::max()),
             "candidate batch exceeds CUB int indexing; lower the peptide batch size");

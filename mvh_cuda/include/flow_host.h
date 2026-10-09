@@ -11,10 +11,15 @@ namespace mvh_flow {
 struct Timing { double seconds=0; uint64_t calls=0; };
 inline std::map<std::string,uint64_t> totals;
 inline std::map<std::string,Timing> timings;
+inline std::map<uint64_t,uint64_t> peptideReuseHistogram;
 inline void time(const char *name,double seconds) { auto &t=timings[name];t.seconds+=seconds;++t.calls; }
-inline void reset() { totals.clear(); timings.clear(); }
+inline void reset() { totals.clear(); timings.clear(); peptideReuseHistogram.clear(); }
 inline void write(const std::string &path,double searchSeconds,uint64_t finalPsms) {
     totals["total_final_psm_candidates"]=finalPsms;
+    std::ofstream reuse(path+"/peptide_reuse_histogram.tsv");
+    reuse.exceptions(std::ios::failbit|std::ios::badbit);
+    reuse<<"scan_associations\tpeptide_entries\n";
+    for(const auto &row:peptideReuseHistogram) reuse<<row.first<<'\t'<<row.second<<'\n';
     std::ofstream c(path+"/flow_counters.tsv"),t(path+"/flow_timings.tsv");
     c.exceptions(std::ios::failbit|std::ios::badbit);t.exceptions(std::ios::failbit|std::ios::badbit);
     c<<"counter\tvalue\n";for(const auto &p:totals)c<<p.first<<'\t'<<p.second<<'\n';

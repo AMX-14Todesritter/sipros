@@ -1,0 +1,19 @@
+{
+  "source_log": "output/benchmarks/profiling/20261008_batch8000000_cuda/nsys.log",
+  "database": "Marine_fw_3rev.fasta",
+  "scans": "Pan_062822_X1iso5.FT2",
+  "rule": "instrument primary only",
+  "parent_tolerance_Da": 0.01,
+  "isotope_windows": [
+    -2,
+    -1,
+    0,
+    1,
+    2
+  ],
+  "batches": 59,
+  "generated_peptide_entries": 464495485,
+  "assigned_peptide_entries": 141679136,
+  "peptide_scan_associations": 1121207358,
+  "sequence_deduplicated": false
+}

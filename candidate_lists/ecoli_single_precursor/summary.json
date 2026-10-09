@@ -1,0 +1,14 @@
+{
+  "scan_file": "/home/ams098z/projects/sipros/test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+  "old_reference": "82522a4 FT2 precursor construction",
+  "new_rule": "S mz + first Z charge; positive primary required",
+  "proton_mass": 1.007276466,
+  "parent_tolerance": 0.01,
+  "scan_count": 46066,
+  "old_precursor_count": 275099,
+  "new_precursor_count": 46066,
+  "removed_count": 229033,
+  "invalid_primary_scans": [],
+  "multiple_z_scan_count": 0,
+  "changed_scan_count": 44760
+}

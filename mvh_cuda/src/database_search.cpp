@@ -2,6 +2,8 @@
 #include "engine.h"
 #include "profiling.h"
 #include "peptide_generation.h"
+#include <cstdlib>
+#include <cstring>
 
 void MvhScanVector::GetAllRangeFromMass(double dPeptideMass, vector<std::pair<int, int>> &vpPeptideMassRanges)
 // all ranges of MS2 scans are stored in  vpPeptideMassWindows
@@ -98,8 +100,15 @@ void MvhScanVector::processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray)
     MVH_PROFILE_SCOPE("mvh/batch/process");
     const auto& inputs = mvh_cuda::packPeptideBatch(vpPeptideArray);
     mvh_cuda::assignPeptides2Scans(inputs, vAllPrecursorMassChargeMS2ScanPtrTuples, vpAllMS2Scans);
-    mvh_cuda::preprocessingMVH(inputs);
-    mvh_cuda::scorePeptidesMVH(vpAllMS2Scans, inputs, vpPeptideArray);
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    const char* assignmentOnly=std::getenv("SIPROS_DIAGNOSTIC_ASSIGNMENT_ONLY");
+    if (!(assignmentOnly && std::strcmp(assignmentOnly,"1")==0)) {
+#endif
+        mvh_cuda::preprocessingMVH(inputs);
+        mvh_cuda::scorePeptidesMVH(vpAllMS2Scans, inputs, vpPeptideArray);
+#ifdef MVH_ENABLE_FLOW_COUNTERS
+    }
+#endif
     MVH_PROFILE_SCOPE("mvh/batch/delete_peptides");
     for (auto *peptide : vpPeptideArray) delete peptide;
     vpPeptideArray.clear();

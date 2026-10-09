@@ -1,0 +1,92 @@
+{
+  "definition": "generated peptide entries; not deduplicated by sequence; number of primary-precursor scan associations under configured mass windows",
+  "generated": 464495485,
+  "assigned": 141679136,
+  "zero": 322816349,
+  "associations": 1121207358,
+  "assigned_mean": 7.913708324703505,
+  "assigned_quantiles": {
+    "0.5": 4,
+    "0.9": 20,
+    "0.95": 25,
+    "0.99": 37,
+    "0.999": 67
+  },
+  "maximum": 94,
+  "at_maximum": 712,
+  "assigned_reused_percent": 77.29608684231388,
+  "bins": [
+    {
+      "scan_count_bin": "0",
+      "peptide_entries": 322816349,
+      "percent_of_all": 69.49827488635331,
+      "percent_of_assigned": null,
+      "associations": 0,
+      "percent_of_associations": 0.0
+    },
+    {
+      "scan_count_bin": "1",
+      "peptide_entries": 32166708,
+      "percent_of_all": 6.92508518139848,
+      "percent_of_assigned": 22.70391315768611,
+      "associations": 32166708,
+      "percent_of_associations": 2.8689347934157956
+    },
+    {
+      "scan_count_bin": "2\u20135",
+      "peptide_entries": 46104959,
+      "percent_of_all": 9.925814241229922,
+      "percent_of_assigned": 32.541812649111584,
+      "associations": 144063409,
+      "percent_of_associations": 12.848953226366536
+    },
+    {
+      "scan_count_bin": "6\u201310",
+      "peptide_entries": 23741656,
+      "percent_of_all": 5.111278099936752,
+      "percent_of_assigned": 16.757341038556305,
+      "associations": 185053884,
+      "percent_of_associations": 16.504875987444244
+    },
+    {
+      "scan_count_bin": "11\u201320",
+      "peptide_entries": 26794561,
+      "percent_of_all": 5.768529913697654,
+      "percent_of_assigned": 18.91214314011627,
+      "associations": 397893256,
+      "percent_of_associations": 35.48792764879447
+    },
+    {
+      "scan_count_bin": "21\u201350",
+      "peptide_entries": 12508350,
+      "percent_of_all": 2.6928894690978535,
+      "percent_of_assigned": 8.828646442338552,
+      "associations": 338527707,
+      "percent_of_associations": 30.193139974024323
+    },
+    {
+      "scan_count_bin": "51\u2013100",
+      "peptide_entries": 362902,
+      "percent_of_all": 0.07812820828602887,
+      "percent_of_assigned": 0.25614357219117995,
+      "associations": 23502394,
+      "percent_of_associations": 2.0961683699546323
+    },
+    {
+      "scan_count_bin": "101\u2013500",
+      "peptide_entries": 0,
+      "percent_of_all": 0.0,
+      "percent_of_assigned": 0.0,
+      "associations": 0,
+      "percent_of_associations": 0.0
+    },
+    {
+      "scan_count_bin": "501+",
+      "peptide_entries": 0,
+      "percent_of_all": 0.0,
+      "percent_of_assigned": 0.0,
+      "associations": 0,
+      "percent_of_associations": 0.0
+    }
+  ]
+}

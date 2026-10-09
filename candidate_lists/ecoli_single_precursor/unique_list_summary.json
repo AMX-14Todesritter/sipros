@@ -1,0 +1,32 @@
+{
+  "identity": "set of (charge, exact FT2 mz); ignores scan ID and input order; no approximate clustering",
+  "results": {
+    "old": {
+      "scan_count": 46066,
+      "distinct_candidate_lists": 46054,
+      "lists_shared_by_multiple_scans": 12,
+      "scans_in_shared_lists": 24,
+      "duplicate_scan_lists_removed": 12,
+      "group_size_histogram": {
+        "1": 46042,
+        "2": 12
+      }
+    },
+    "new": {
+      "scan_count": 46066,
+      "distinct_candidate_lists": 44627,
+      "lists_shared_by_multiple_scans": 1264,
+      "scans_in_shared_lists": 2703,
+      "duplicate_scan_lists_removed": 1439,
+      "group_size_histogram": {
+        "1": 43363,
+        "2": 1141,
+        "3": 87,
+        "4": 25,
+        "5": 8,
+        "6": 2,
+        "8": 1
+      }
+    }
+  }
+}

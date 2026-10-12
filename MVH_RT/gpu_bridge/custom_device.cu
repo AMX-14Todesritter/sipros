@@ -3,19 +3,37 @@
 #include <optix_device.h>
 extern "C" { __constant__ mvh_rt_gpu::Params params; }
 namespace {
-struct Query { uint64_t count; unsigned ion; int group; uint64_t start; };
+struct Query {
+    uint64_t count, rejected, mask; unsigned ion; int group; uint64_t start;
+    const int *scanIds; int scanCount;
+};
 }
 extern "C" __global__ void __anyhit__record() {
     const auto pointer=(static_cast<unsigned long long>(optixGetPayload_1())<<32)|optixGetPayload_0();
     auto &q=*reinterpret_cast<Query*>(pointer);
     const auto primitive=params.groupSphereOffsets[q.group]+optixGetPrimitiveIndex();
+    const unsigned scan=params.sphereScanIndices[primitive];
+    if(params.earlyScanFilter) {
+        bool relevant;
+        if(params.sharedTaskScanMasks) {
+            relevant=(q.mask & (uint64_t(1)<<params.scanGroupSlots[scan]))!=0;
+        } else {
+            int lo=0,hi=q.scanCount;
+            while(lo<hi){int mid=lo+(hi-lo)/2;if(q.scanIds[mid]<int(scan))lo=mid+1;else hi=mid;}
+            relevant=lo<q.scanCount && q.scanIds[lo]==int(scan);
+        }
+        if(!relevant) {
+            if(!params.collectMode)++q.rejected;
+            optixIgnoreIntersection();return;
+        }
+    }
     if(params.collectMode) {
         // A second traversal must fit the first traversal's exact allocation.
         const unsigned task=optixGetLaunchIndex().x;
         if(q.count>=params.hitOffsets[task+1]-params.hitBase-q.start) {
             params.hitCounts[task]=~uint64_t(0); optixIgnoreIntersection(); return;
         }
-        params.hits[q.start+q.count]={q.ion,params.sphereScanIndices[primitive],params.spherePeakIndices[primitive]};
+        params.hits[q.start+q.count]={q.ion,scan,params.spherePeakIndices[primitive]};
     }
     ++q.count;
     optixIgnoreIntersection();
@@ -25,6 +43,11 @@ extern "C" __global__ void __raygen__camera() {
     const unsigned index=optixGetLaunchIndex().x;
     const auto &task=params.sharedTasks[index];
     Query q{};q.group=task.groupId;q.start=params.collectMode?params.hitOffsets[index]-params.hitBase:0;
+    if(params.earlyScanFilter) {
+        q.scanIds=params.sharedTaskScanIds+task.first;
+        q.scanCount=int(params.sharedTaskScanCounts[index]);
+        if(params.sharedTaskScanMasks)q.mask=params.sharedTaskScanMasks[index];
+    }
     const bool valid=params.sharedIonValid[task.theoryId]>0;
     const auto handle=params.handles[task.groupId];
     if(valid && handle) {
@@ -40,6 +63,7 @@ extern "C" __global__ void __raygen__camera() {
                 OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,0,1,0,lo,hi);
         }
     }
+    if(params.earlyRejectedCounts)params.earlyRejectedCounts[index]=q.rejected;
     // Counts are checked by CUDA before reduction. No scores are produced here.
     if(!params.collectMode || params.hitCounts[index]!=~uint64_t(0))params.hitCounts[index]=q.count;
 }

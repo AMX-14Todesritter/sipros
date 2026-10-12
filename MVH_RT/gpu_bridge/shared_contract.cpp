@@ -156,6 +156,6 @@ void checkHitBudget() {
     mvh_rt_gpu::reset();mvh_rt_gpu::setWorkspaceMiB(512);
 }
 int main() {
-    try {for(int k:{1,2,8,32,128})check(k);checkLaunchBoundary();checkMassGroups();checkHitBudget();std::cout<<"PASS: shared scans, unrelated hits, class priority, strict boundary, duplicated ions/candidates, skip/ranges and reuse\n";return 0;}
+    try {for(bool early:{false,true}) {mvh_rt_gpu::setEarlyScanFilter(early);for(int k:{1,2,8,10,32,64,128})check(k);}mvh_rt_gpu::setEarlyScanFilter(true);checkLaunchBoundary();checkMassGroups();checkHitBudget();std::cout<<"PASS: shared scans, unrelated hits, class priority, strict boundary, duplicated ions/candidates, skip/ranges and reuse\n";return 0;}
     catch(const std::exception &e){mvh_rt_gpu::reset();std::cerr<<e.what()<<'\n';return 1;}
 }

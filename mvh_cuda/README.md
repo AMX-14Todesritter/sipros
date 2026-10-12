@@ -287,3 +287,9 @@ RT-custom splits double m/z into integer and fractional float coordinates, adds
 boundary copies, and traces downward from z=0.5 through equal-radius spheres.
 Its float boundary and tie behavior still requires comparison with the double
 reference. See [sphere matching](../MVH_RT/gpu_bridge/CUSTOM_MATCHING.md).
+
+## Candidate-count batch sizing
+
+Search batches default to a hard limit of 2,000,000 precursor candidate associations, configured by `--candidate-batch-size N`. GPU lookahead counts at most 65,536 generated peptide objects at a time using the assignment mass-window kernel, retaining precursor/window buffers between pages. Original generation and scan-local candidate order remain stable. Unassigned peptides are released, and each positive-count peptide stays in a single batch. A single peptide exceeding the limit is rejected explicitly. Duplicate precursor hypotheses and the original overlapping-window rules count toward the limit, including associations to skipped scans. Normal assignment recomputes ranges and checks the actual count against the planned count; no candidate list is generated twice.
+
+`--peptide-batch-size N` selects the historical generated-peptide limit for comparisons and is mutually exclusive with candidate sizing. Run summaries record `batch_sizing` and the active limit (the inactive limit is zero). The bridge benchmark defaults to candidate units; use `--batch-unit generated-peptides` to reproduce historical peptide-batch runs. This does not bound theoretical-ion or any-hit list sizes, which retain their independent RT workspace budget.

@@ -1,5 +1,7 @@
 #pragma once
 #include <string>
+#include <cstdint>
+#include <limits>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -53,7 +55,8 @@ private:
     void assignPeptides2Scans(const vector<Peptide *> &peptides);
     pair<int, int> GetRangeFromMass(double lb, double ub);
     void GetAllRangeFromMass(double dPeptideMass, vector<pair<int, int>> &vpPeptideMassRanges);
-    void processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray);
+    void processPeptideArrayMvh(vector<Peptide *> &vpPeptideArray,
+        uint64_t expectedCandidates=std::numeric_limits<uint64_t>::max());
 
     vector<vector<double> *> _ppdAAforward;
     vector<vector<double> *> _ppdAAreverse;

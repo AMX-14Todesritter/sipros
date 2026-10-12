@@ -12,6 +12,8 @@ void setWorkspaceMiB(int size);
 int workspaceMiB();
 void setScanGroupSize(int size);
 int scanGroupSize();
+void setEarlyScanFilter(bool enabled);
+bool earlyScanFilter();
 
 struct Params {
     const mvh_cuda::Scan *scans;
@@ -47,6 +49,12 @@ struct Params {
     uint64_t hitBase;
     int collectMode; // 0=count, 1=store; both traverse all intersections
     const int *scanGroups;
+    const int *scanGroupSlots;
+    const int *sharedTaskScanIds;
+    const uint64_t *sharedTaskScanCounts;
+    const uint64_t *sharedTaskScanMasks;
+    uint64_t *earlyRejectedCounts;
+    int earlyScanFilter;
     unsigned *selectedPeaks; // optional contract observer, candidate-major
     int selectedPeakStride;
 };

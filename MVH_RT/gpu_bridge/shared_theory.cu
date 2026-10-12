@@ -6,6 +6,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/sort.h>
 #include <thrust/scan.h>
+#include <thrust/reduce.h>
 #include <thrust/sequence.h>
 #include <algorithm>
 #include <chrono>
@@ -32,9 +33,9 @@ __global__ void minMass(const mvh_cuda::Precursor *ps,int n,double *mass) {
 }
 __global__ void geometryCounts(const mvh_cuda::Scan *scans,const int *order,int n,
                               const double *peaks,const int *classes,double tolerance,
-                              uint64_t *counts,int *groups,int k) {
+                              uint64_t *counts,int *groups,int *groupSlots,int k) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=n)return;
-    int s=order[i];groups[s]=i/k;const auto scan=scans[s];uint64_t count=0;
+    int s=order[i];groups[s]=i/k;groupSlots[s]=i%k;const auto scan=scans[s];uint64_t count=0;
     if(!scan.skip)for(int j=0;j<scan.peaks;++j) {
         uint64_t p=scan.peakOffset+j;if(classes[p]<1||classes[p]>3)continue;
         double f=peaks[p]-floor(peaks[p]);count+=1+(f<=tolerance)+(1-f<=tolerance);
@@ -103,15 +104,17 @@ __global__ void generateTheory(Params p,const SharedTask *keys,int n,const uint6
 }
 __global__ void finishTasks(SharedTask *tasks,const int *ends,int n,const int *indices,
                             const mvh_cuda::Candidate *cs,const uint64_t *ions,
-                            uint64_t *slots,uint64_t *matrix,int *scanIds) {
+                            uint64_t *slots,uint64_t *matrix,int *scanIds,const int *groupSlots,uint64_t *masks) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=n)return;auto &t=tasks[i];t.count=ends[i]-t.first;
-    int count=0;int *list=scanIds+t.first;
+    int count=0;int *list=scanIds+t.first;uint64_t mask=0;
     for(int j=t.first;j<ends[i];++j) {
         int scan=cs[indices[j]].scanId,lo=0,hi=count;
         while(lo<hi){int mid=lo+(hi-lo)/2;if(list[mid]<scan)lo=mid+1;else hi=mid;}
         if(lo<count&&list[lo]==scan)continue;
+        if(masks)mask|=uint64_t(1)<<groupSlots[scan];
         for(int pos=count;pos>lo;--pos)list[pos]=list[pos-1];list[lo]=scan;++count;
     }
+    if(masks)masks[i]=mask;
     slots[i]=count;matrix[i]=uint64_t(count)*(ions[t.theoryId+1]-ions[t.theoryId]);
 }
 __global__ void fitTasks(const uint64_t *hits,const uint64_t *matrix,int first,int n,uint64_t budget,int *end) {
@@ -133,23 +136,34 @@ __device__ int findScan(const int *scans,int n,int s) {
 // IDs make repeated any-hit invocations and split copies idempotent. No atomics
 // or arrival-order decisions participate in choosing the winner.
 __global__ void reduceHits(Params p,const uint64_t *slotCounts,const int *scanIds,
-                           const uint64_t *matrixOffsets,uint64_t matrixBase,unsigned *best) {
+                           const uint64_t *matrixOffsets,uint64_t matrixBase,unsigned *best,unsigned long long *filterCounts) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=p.size)return;const auto t=p.sharedTasks[i];
     const int *scans=scanIds+t.first;int ns=int(slotCounts[i]);
     uint64_t begin=p.sharedIonOffsets[t.theoryId],ni=p.sharedIonOffsets[t.theoryId+1]-begin;
     unsigned *winners=best+matrixOffsets[i]-matrixBase;
+    // Mutually exclusive rejection reasons, eligible records, and final winners.
+    unsigned long long local[8]={};
     for(uint64_t j=0;j<ni*ns;++j)winners[j]=~0u;
     for(uint64_t j=p.hitOffsets[i]-p.hitBase;j<p.hitOffsets[i+1]-p.hitBase;++j) {
-        const auto h=p.hits[j];int slot=findScan(scans,ns,h.scan);if(slot<0||h.ion>=ni)continue;
+        const auto h=p.hits[j];int slot=findScan(scans,ns,h.scan);
+        if(slot<0){++local[0];continue;}
+        if(h.ion>=ni){++local[1];continue;}
         const auto scan=p.scans[h.scan];double mz=p.sharedIons[begin+h.ion];
-        if(scan.skip||mz<scan.lower||mz>scan.upper)continue;
+        if(scan.skip){++local[2];continue;}
+        if(mz<scan.lower||mz>scan.upper){++local[3];continue;}
         int cls=p.classes[h.peak];double distance=fabs(mz-p.peaks[h.peak]);
-        if(cls<1||cls>3||!(distance<p.cfg.fragmentTolerance))continue;
+        if(cls<1||cls>3){++local[4];continue;}
+        if(!(distance<p.cfg.fragmentTolerance)){++local[5];continue;}
+        ++local[6];
         unsigned &old=winners[uint64_t(h.ion)*ns+slot];
         if(old==~0u||cls>p.classes[old]||
            (cls==p.classes[old]&&(distance<fabs(mz-p.peaks[old])||
             (distance==fabs(mz-p.peaks[old])&&h.peak<old))))old=h.peak;
     }
+
+    for(uint64_t j=0;j<ni*ns;++j)local[7]+=winners[j]!=~0u;
+    // One update per task/reason, never an atomic for each raw hit.
+    for(int reason=0;reason<8;++reason)if(local[reason])atomicAdd(filterCounts+reason,local[reason]);
 
     for(int s=0;s<ns;++s) {
         const auto scan=p.scans[scans[s]];mvh_cuda::Result result{};
@@ -192,14 +206,14 @@ std::unique_ptr<GroupedGeometry> prepareGroupedGeometry(const std::vector<mvh_cu
     thrust::sequence(thrust::device_pointer_cast(order.p),thrust::device_pointer_cast(order.p+n));
     thrust::stable_sort_by_key(thrust::device_pointer_cast(masses.p),thrust::device_pointer_cast(masses.p+n),thrust::device_pointer_cast(order.p));
     Buffer<uint64_t> counts(n+1),offsets(n+1);check(cudaMemset(counts.p,0,counts.n*8));
-    if(n)geometryCounts<<<(n+127)/128,128>>>(scans.p,order.p,n,peaks,classes,tolerance,counts.p,g->scanGroups.p,k);
+    if(n)geometryCounts<<<(n+127)/128,128>>>(scans.p,order.p,n,peaks,classes,tolerance,counts.p,g->scanGroups.p,g->scanGroupSlots.p,k);
     prefix(counts,offsets);uint64_t total=scalar(offsets.p+n);
     g->centers.resize(total);g->peaks.resize(total);g->scans.resize(total);g->offsets.resize(ng+1);
     if(n)packGeometry<<<(n+127)/128,128>>>(scans.p,order.p,n,peaks,classes,tolerance,offsets.p,g->centers.p,g->peaks.p,g->scans.p);
     groupOffsets<<<(ng+256)/256,256>>>(offsets.p,n,k,g->offsets.p,ng);
     mvh_cuda::synced();g->offsets.read(g->hostOffsets);return g;
 }
-void executeShared(Params p,const int *scanGroups,int groupCount,const std::function<void(Params)>& trace) {
+void executeShared(Params p,const int *scanGroups,const int *scanGroupSlots,int groupCount,const std::function<void(Params)>& trace) {
     const int n=p.size;int bits=0;while((uint64_t(1)<<bits)<unsigned(groupCount))++bits;
     if(bits>31)throw std::runtime_error("Too many BVH groups for key encoding");
     const uint64_t budget=uint64_t(workspaceMiB())*1024*1024;
@@ -215,9 +229,10 @@ void executeShared(Params p,const int *scanGroups,int groupCount,const std::func
         mvh_cuda::synced();
     }
     const auto sortedAt=std::chrono::steady_clock::now();
-    uint64_t totalTasks=0,totalKeys=0,totalIons=0,totalHits=0,maxTemp=0;int launches=0;
+    uint64_t totalTasks=0,totalKeys=0,totalIons=0,totalHits=0,totalEarlyRejected=0,maxTemp=0;int launches=0;
     double theorySeconds=0,traceSeconds=0,reduceSeconds=0;
     Buffer<int> endpoint(1);
+    Buffer<unsigned long long> filterCounts(8);check(cudaMemset(filterCounts.p,0,8*sizeof(unsigned long long)));
     for(int first=0;first<n;) {
         // A conservative candidate tile bounds task metadata; the final key is
         // extended so no peptide/charge is generated twice across tiles.
@@ -258,15 +273,23 @@ void executeShared(Params p,const int *scanGroups,int groupCount,const std::func
         Buffer<uint64_t> slotCounts(nt+1),matrixCounts(nt+1),matrixOffsets(nt+1);
         check(cudaMemset(slotCounts.p,0,slotCounts.n*8));check(cudaMemset(matrixCounts.p,0,matrixCounts.n*8));
         Buffer<int> taskScanIds(cn);
-        finishTasks<<<(nt+127)/128,128>>>(tasks->p,ends->p,nt,p.sharedCandidateIndices,p.candidates,ionOffsets->p,slotCounts.p,matrixCounts.p,taskScanIds.p);
+        Buffer<uint64_t> taskScanMasks(p.earlyScanFilter && p.scanGroupSize<=64 ? nt : 0);
+        finishTasks<<<(nt+127)/128,128>>>(tasks->p,ends->p,nt,p.sharedCandidateIndices,p.candidates,ionOffsets->p,slotCounts.p,matrixCounts.p,taskScanIds.p,scanGroupSlots,taskScanMasks.p);
         prefix(matrixCounts,matrixOffsets);
         keys.reset();ends.reset();mvh_cuda::synced();
         theorySeconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-theoryStarted).count();
         Buffer<uint64_t> hitCounts(nt+1),hitOffsets(nt+1);check(cudaMemset(hitCounts.p,0,hitCounts.n*8));
+        Buffer<uint64_t> earlyRejected(p.earlyScanFilter ? nt : 0);
         p.size=nt;p.sharedTasks=tasks->p;p.collectMode=0;p.hitCounts=hitCounts.p;
+        p.scanGroupSlots=scanGroupSlots;p.sharedTaskScanIds=taskScanIds.p;
+        p.sharedTaskScanCounts=slotCounts.p;p.sharedTaskScanMasks=taskScanMasks.p;
+        p.earlyRejectedCounts=earlyRejected.p;
         auto at=std::chrono::steady_clock::now();trace(p);mvh_cuda::synced();prefix(hitCounts,hitOffsets);
         uint64_t hits=scalar(hitOffsets.p+nt);traceSeconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();
-        const uint64_t persistent=ionCount*8+uint64_t(nk)*12+uint64_t(nt)*72+uint64_t(cn)*4;
+        if(earlyRejected.n)totalEarlyRejected+=thrust::reduce(thrust::device_pointer_cast(earlyRejected.p),
+            thrust::device_pointer_cast(earlyRejected.p+earlyRejected.n),uint64_t(0));
+        const uint64_t persistent=ionCount*8+uint64_t(nk)*12+uint64_t(nt)*72+uint64_t(cn)*4
+            +(taskScanMasks.n+earlyRejected.n)*sizeof(uint64_t);
         if(persistent>=budget)throw std::runtime_error("RT chunk metadata exceeds workspace");
         for(int a=0;a<nt;) {
             fitTasks<<<1,1>>>(hitOffsets.p,matrixOffsets.p,a,nt,budget-persistent,endpoint.p);int b=scalar(endpoint.p);
@@ -275,19 +298,35 @@ void executeShared(Params p,const int *scanGroups,int groupCount,const std::func
             Buffer<CollectedHit> collected(he-hb);Buffer<unsigned> best(me-mb);
             Params q=p;q.size=b-a;q.sharedTasks=tasks->p+a;q.hitCounts=hitCounts.p+a;q.hitOffsets=hitOffsets.p+a;
             q.hits=collected.p;q.hitBase=hb;q.collectMode=1;
+            q.sharedTaskScanCounts=slotCounts.p+a;
+            q.sharedTaskScanMasks=taskScanMasks.n ? taskScanMasks.p+a : nullptr;
+            q.earlyRejectedCounts=nullptr;
             check(cudaMemset(q.hitCounts,0,q.size*8));at=std::chrono::steady_clock::now();trace(q);mvh_cuda::synced();
             check(cudaMemset(error.p,0,4));checkCounts<<<(q.size+255)/256,256>>>(q.hitCounts,q.hitOffsets,q.size,error.p);
             if(scalar(error.p))throw std::runtime_error("Any-hit count/store disagreement; no partial results accepted");
             traceSeconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();
             at=std::chrono::steady_clock::now();
-            reduceHits<<<(q.size+127)/128,128>>>(q,slotCounts.p+a,taskScanIds.p,matrixOffsets.p+a,mb,best.p);mvh_cuda::synced();
+            reduceHits<<<(q.size+127)/128,128>>>(q,slotCounts.p+a,taskScanIds.p,matrixOffsets.p+a,mb,best.p,filterCounts.p);mvh_cuda::synced();
             reduceSeconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();
             maxTemp=std::max(maxTemp,persistent+(he-hb)*sizeof(CollectedHit)+(me-mb)*4);++launches;a=b;
         }
         totalTasks+=nt;totalKeys+=nk;totalIons+=ionCount;totalHits+=hits;
         first=end;
     }
+    std::vector<unsigned long long> filtered;filterCounts.read(filtered);
+    uint64_t rejected=0;for(int reason=0;reason<6;++reason)rejected+=filtered[reason];
+    if(p.earlyScanFilter && filtered[0])throw std::runtime_error("Early scan filter retained unrelated scan hits");
+    if(rejected+filtered[6]!=totalHits || filtered[7]>filtered[6])
+        throw std::runtime_error("RT hit filtering accounting mismatch");
     const auto finished=std::chrono::steady_clock::now();
+    std::cout<<"[RT early filtering] raw_hits="<<totalHits+totalEarlyRejected
+        <<" unrelated_scan="<<totalEarlyRejected<<" stored_hits="<<totalHits
+        <<" enabled="<<p.earlyScanFilter<<'\n';
+    std::cout<<"[RT hit filtering] collected="<<totalHits<<" unrelated_scan="<<filtered[0]
+        <<" invalid_ion="<<filtered[1]<<" skipped_scan="<<filtered[2]<<" outside_scan_range="<<filtered[3]
+        <<" invalid_class="<<filtered[4]<<" outside_tolerance="<<filtered[5]
+        <<" rejected="<<rejected<<" eligible="<<filtered[6]<<" retained="<<filtered[7]
+        <<" eligible_not_retained="<<filtered[6]-filtered[7]<<'\n';
     std::cout<<"[RT shared tasks] candidates="<<n<<" tasks="<<totalTasks<<" theory_keys="<<totalKeys
         <<" generated_ions="<<totalIons<<" collected_hits="<<totalHits<<" store_launches="<<launches
         <<" workspace_max_bytes="<<maxTemp<<" workspace_budget_bytes="<<budget<<'\n';

@@ -5,7 +5,7 @@
 #include <iostream>
 #include <limits>
 namespace mvh_rt_gpu {
-namespace { int configuredGroupSize=8, configuredWorkspaceMiB=512; }
+namespace { int configuredGroupSize=10, configuredWorkspaceMiB=512; bool configuredEarlyScanFilter=false; }
 namespace sphere_backend {
 namespace {
 struct SphereState {
@@ -60,7 +60,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans,const double* peaks,
     std::cout<<"[RT GPU setup] scans="<<scans.size()<<" geometry=precursor-grouped-mixed-class-spheres"
         <<" scan_group_size="<<configuredGroupSize<<" groups="<<groups<<" grouping=min-neutral-mass"
         <<" class_priority=3,2,1 active_gas="<<stats.activeScans<<" as_bytes="<<stats.outputBytes
-        <<" scratch_bytes="<<stats.scratchBytes<<" geometry_bytes="<<g.centers.n*20+g.offsets.n*8+g.scanGroups.n*4<<'\n';
+        <<" scratch_bytes="<<stats.scratchBytes<<" geometry_bytes="<<g.centers.n*20+g.offsets.n*8+g.scanGroups.n*8<<'\n';
 }
 void launch(Params p) {
     if(!state)throw std::runtime_error("Sphere resources not prepared");
@@ -68,8 +68,8 @@ void launch(Params p) {
     if(!p.size)return;
     auto &g=*state->geometry;p.scanGroupSize=state->groupSize;
     p.spherePeakIndices=g.peaks.p;p.sphereScanIndices=g.scans.p;p.groupSphereOffsets=g.offsets.p;
-    p.rayTmax=1.0f;p.instanced=false;
-    executeShared(p,g.scanGroups.p,int(g.hostOffsets.size()-1),[&](Params q){state->scene.launch(q);});
+    p.rayTmax=1.0f;p.instanced=false;p.earlyScanFilter=configuredEarlyScanFilter;
+    executeShared(p,g.scanGroups.p,g.scanGroupSlots.p,int(g.hostOffsets.size()-1),[&](Params q){state->scene.launch(q);});
 }
 }
 void setScanGroupSize(int size) {
@@ -78,6 +78,8 @@ void setScanGroupSize(int size) {
     configuredGroupSize=size;
 }
 int scanGroupSize(){return configuredGroupSize;}
+void setEarlyScanFilter(bool enabled){configuredEarlyScanFilter=enabled;}
+bool earlyScanFilter(){return configuredEarlyScanFilter;}
 void setWorkspaceMiB(int size){if(size<16)throw std::runtime_error("RT workspace must be at least 16 MiB");configuredWorkspaceMiB=size;}
 int workspaceMiB(){return configuredWorkspaceMiB;}
 }

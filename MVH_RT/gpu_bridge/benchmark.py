@@ -21,8 +21,11 @@ p = argparse.ArgumentParser()
 p.add_argument('--root', type=Path, required=True)
 p.add_argument('--output', type=Path, help='New output directory (default: project output tree)')
 p.add_argument('--batch', type=int, default=4000000)
-p.add_argument('--rt-scan-group-size', type=int, default=8)
+p.add_argument('--batch-unit', choices=['candidates', 'generated-peptides'], default='candidates',
+               help='GPU batch limit unit; CPU reference retains generated-peptide batches')
+p.add_argument('--rt-scan-group-size', type=int, default=10)
 p.add_argument('--rt-workspace-mib', type=int, default=512)
+p.add_argument('--rt-hit-filter', choices=['scan', 'off'], default='off')
 p.add_argument('--scans', type=Path)
 p.add_argument('--config', type=Path)
 p.add_argument('--fasta', type=Path, help='FASTA override; default is raw/Ecoli.fasta')
@@ -77,7 +80,9 @@ env['LD_LIBRARY_PATH'] = str(root / 'build/mvh_rt/optix_runtime') + ':/usr/local
 report = {
     'inputs_sha256': {str(f): sha(f) for f in inputs},
     'binaries_sha256': {str(f): sha(f) for f in (cpu, gpu)},
-    'gpu_batch_generated_peptides': a.batch,
+    'gpu_batch_unit': a.batch_unit,
+    'gpu_batch_candidates': a.batch if a.batch_unit == 'candidates' else None,
+    'gpu_batch_generated_peptides': a.batch if a.batch_unit == 'generated-peptides' else None,
     'cpu_batch_generated_peptides': a.batch,
     'cpu_threads': 4,
     'verification': False,
@@ -118,12 +123,14 @@ try:
             name = f'{backend}_{repeat}'
             output = a.output / name
             command = [str(cpu if backend == 'cpu' else gpu), '-f', str(inputs[0]),
-                       '-c', str(inputs[1]), '-fasta', str(inputs[2]), '-o', str(output), '-t', '4', '--peptide-batch-size', str(a.batch)]
+                       '-c', str(inputs[1]), '-fasta', str(inputs[2]), '-o', str(output), '-t', '4']
+            batch_option = '--candidate-batch-size' if backend != 'cpu' and a.batch_unit == 'candidates' else '--peptide-batch-size'
+            command += [batch_option, str(a.batch)]
             if backend != 'cpu':
                 command += ['--match-backend', backend]
                 if backend == 'rt-custom':
                     command += ['--rt-scan-group-size', str(a.rt_scan_group_size),
-                                '--rt-workspace-mib', str(a.rt_workspace_mib)]
+                                '--rt-workspace-mib', str(a.rt_workspace_mib), '--rt-hit-filter', a.rt_hit_filter]
             before = gpu_memory()
             peak_gpu, peak_rss, hwm = before, 0, 0
             samples = 0
@@ -170,6 +177,23 @@ try:
                 item['rt_setup_seconds'] = sum(map(float, setup_times)) if setup_times else None
                 item['rt_setup'] = [dict(re.findall(r'(\w+)=([^ ]+)', line))
                                     for line in text.splitlines() if line.startswith('[RT GPU setup]')]
+                item['rt_hit_filtering'] = [dict(re.findall(r'(\w+)=([^ ]+)', line))
+                                            for line in text.splitlines() if line.startswith('[RT hit filtering]')]
+                if item['rt_hit_filtering']:
+                    totals = {key: sum(int(row[key]) for row in item['rt_hit_filtering'])
+                              for key in item['rt_hit_filtering'][0]}
+                    if totals['rejected'] + totals['eligible'] != totals['collected']:
+                        raise RuntimeError('RT hit filtering totals disagree')
+                    item['rt_hit_filtering_totals'] = totals
+                    item['rt_hit_rejection_fraction'] = totals['rejected'] / totals['collected'] if totals['collected'] else None
+                early_rows = [dict((k,int(v)) for k,v in re.findall(r'(\w+)=(\d+)', line))
+                              for line in text.splitlines() if line.startswith('[RT early filtering]')]
+                if early_rows:
+                    item['rt_early_filtering_totals'] = {k:sum(row[k] for row in early_rows)
+                                                       for k in ('raw_hits', 'unrelated_scan', 'stored_hits')}
+                    early = item['rt_early_filtering_totals']
+                    if early['raw_hits'] != early['unrelated_scan'] + early['stored_hits']:
+                        raise RuntimeError('RT early filtering accounting mismatch')
             report['runs'].append(item)
             save()
             print('DONE', name, 'exit=', item['exit_code'], 'wall_seconds=', round(item['wall_seconds'], 3), flush=True)

@@ -6,7 +6,7 @@
 
 ## 分组与几何
 
-`--rt-scan-group-size K` 为每组不同 scan 的数量上限，任意正整数，默认 8；
+`--rt-scan-group-size K` 为每组不同 scan 的数量上限，任意正整数，默认 10；
 可以大于数据集 scan 数以构建一组，末组允许不足 K。
 每个 scan 用**所有有效前体假设中最小的中性质量**作为锚点，CUDA 求最小值、
 GPU 稳定排序后每 K 个 scan 分组。相同锚点保持 scan 原顺序。
@@ -91,7 +91,7 @@ docker exec -w /workspace/sipros -e LD_LIBRARY_PATH=/workspace/sipros/build/mvh_
 
 `--verify-cuda` 为 custom 使用独立 CPU 穷举 class 优先参考；并保留预处理、candidate、
 Top/protein 等验证。其他后端仍使用原规则。
-契约覆盖 K1/2/8/32/128、非 scan 顺序质量分组、多个假设、混合 class、近距/等距峰身份、
+契约覆盖 K1/2/8/10/32/128、非 scan 顺序质量分组、多个假设、混合 class、近距/等距峰身份、
 严格边界、split 副本、重复理论峰与 candidate、skip/range、跨块映射及缓冲不足重试。
 集成比较跨 K/批次的逐字节 PSM，含无缓存路径。
 
@@ -100,8 +100,16 @@ Top/protein 等验证。其他后端仍使用原规则。
 ```sh
 docker exec -w /workspace/sipros sipros-sipros-1 python3 -B MVH_RT/gpu_bridge/benchmark.py \
   --root /workspace/sipros --fasta /workspace/sipros/raw/Marine_fw_3rev.fasta \
-  --batch 8000000 --backends rt-custom --rt-scan-group-size 64 --rt-workspace-mib 512 --repeats 1
+  --batch 8000000 --batch-unit candidates --backends rt-custom --rt-scan-group-size 64 --rt-workspace-mib 512 --repeats 1
 ```
 
 K64 是本次试验点，不是已确定最优值。旧故障记录见
 `output/validation/shared_anyhit/ROOT_CAUSE.md`，旧性能报告不描述本版实现。
+
+`[RT hit filtering]` 每批记录完整命中的互斥过滤原因：无关 scan、无效理论峰序号、skip、scan m/z 范围外、无效 class、严格容差外；`rejected + eligible = collected`。`retained` 是共享任务中理论峰与有效 scan 的最终 winner 数，不按重复 candidate 放大。`eligible_not_retained` 包含其他有效峰及重复几何，不等于无效命中数。统计每个任务局部累计后更新计数器，其开销包含在本轮耗时中。
+
+默认搜索批次按 candidate 关联数限制，`--candidate-batch-size N`（默认 2,000,000）先在最多 65,536 条生成肽的 lookahead 上用原 GPU 质量窗口 kernel 计数，再按原顺序划分。每批不超过 N；同一条肽不拆批，单肽超限明确报错。零关联肽释放，不进入评分。计数包含重复前体假设及原窗口重叠规则，也包含 skip scan 关联；它不是去重 scan 或共享 task 数。正式关联阶段再次计算质量区间并核对总数，不提前生成 candidate 列表。`--peptide-batch-size` 保留旧生成肽批次对照，两选项互斥。benchmark 的 `--batch` 默认使用 candidate 单位；历史 800 万生成肽测试应明确指定 `--batch-unit generated-peptides`。
+
+## Early candidate-scan filtering
+
+`--rt-hit-filter scan|off` defaults to `off`; early filtering remains an optional experiment. The GAS membership, sphere centers and traversal remain identical. Per-scan group slots and per-task candidate masks filter unrelated scan IDs in any-hit before counting or storing records. K<=64 uses a 64-bit mask; larger groups search the existing sorted candidate-scan list. Both traversals use identical membership tests. Range checks, strict double tolerance, class/distance selection and scoring remain in CUDA. `off` preserves full collection for comparison. `[RT early filtering]` reports raw callback records from the count traversal, early rejected unrelated scans, and stored records; `raw_hits = unrelated_scan + stored_hits`. `[RT hit filtering]` now describes only records reaching CUDA, so its `collected` denominator differs from the full-collection baseline. Additional metadata and statistics buffers are included in the local workspace estimate.

@@ -70,7 +70,9 @@ void mvh_app::run(const std::string &input, const std::string &config,
            << "peptide_generation\t" << mvh_cuda::peptideGenerationName() << '\n'
            << "spectrum_cache\t" << (mvh_cuda::spectrumDeviceCache() ? "device" : "host") << '\n'
            << "omp_max_threads\t" << omp_get_max_threads() << '\n'
-           << "peptide_batch_size\t" << mvh_cuda::peptideBatchSize() << '\n'
+           << "batch_sizing\t" << mvh_cuda::batchSizingName() << '\n'
+           << "candidate_batch_size\t" << (std::string(mvh_cuda::batchSizingName())=="candidates" ? mvh_cuda::candidateBatchSize() : 0) << '\n'
+           << "peptide_batch_size\t" << (std::string(mvh_cuda::batchSizingName())=="generated-peptides" ? mvh_cuda::peptideBatchSize() : 0) << '\n'
            << "config_and_load_seconds\t" << loaded-begin << '\n'
            << "preprocess_seconds\t" << prepared-loaded << '\n'
            << "search_seconds\t" << searched-prepared << '\n'
@@ -82,6 +84,7 @@ void mvh_app::run(const std::string &input, const std::string &config,
     if (mvh_cuda::matchBackendName()=="rt-custom")
         report << "rt_scan_group_size\t" << mvh_cuda::rtScanGroupSize() << '\n'
                << "rt_scan_grouping\tmin-neutral-mass\nrt_class_priority\t3,2,1\n"
+               << "rt_hit_filter\t" << mvh_cuda::rtHitFilterName() << '\n'
                << "rt_workspace_mib\t" << mvh_cuda::rtWorkspaceMiB() << '\n';
     report.close();
     std::cout << "MVH results: " << output << "\nSearch seconds: " << searched-prepared

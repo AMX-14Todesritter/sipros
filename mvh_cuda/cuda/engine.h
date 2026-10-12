@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <memory>
 #include "peptide_batch.h"
 #include <tuple>
 #include <string>
@@ -19,12 +20,30 @@ void setRtScanGroupSize(int size);
 int rtScanGroupSize();
 void setRtWorkspaceMiB(int size);
 int rtWorkspaceMiB();
+void setRtHitFilter(const std::string& mode);
+const char* rtHitFilterName();
 const std::string &matchBackendName();
 struct MatchBackendScope { ~MatchBackendScope(); };
 void setPeptideBatchSize(int size);
 void setSpectrumDeviceCache(bool enabled);
 bool spectrumDeviceCache();
 int peptideBatchSize();
+void setCandidateBatchSize(int size);
+int candidateBatchSize();
+const char* batchSizingName();
+size_t assignedCandidateCount();
+// Counts exact precursor associations without materializing Candidate objects.
+// Immutable precursor/windows buffers persist across bounded lookahead pages.
+class CandidateBatchCounter {
+public:
+    CandidateBatchCounter(const std::vector<std::tuple<double,int,MS2Scan*>>& precursors,
+                          const std::vector<MS2Scan*>& scans);
+    ~CandidateBatchCounter();
+    std::vector<uint64_t> count(const std::vector<double>& masses);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
 void preProcessAllMs2Mvh(std::vector<MS2Scan *> &scans);
 // Borrowed until the next pack/reset; production packs once for all stages.
 const PeptideBatch& packPeptideBatch(const std::vector<Peptide*>& peptides);

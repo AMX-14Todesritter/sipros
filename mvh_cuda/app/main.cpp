@@ -19,12 +19,13 @@ int main(int argc, char **argv) {
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
-                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--rt-scan-group-size K (positive)] [--rt-workspace-mib N (>=16)] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
+                             "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--candidate-batch-size N | --peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--score-impact] [--rt-scan-group-size K (positive)] [--rt-workspace-mib N (>=16)] [--rt-hit-filter scan|off] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
-                             "SIPROS_OUTPUT_ROOT overrides the output root.\n";
+                             "SIPROS_OUTPUT_ROOT overrides the output root.\n"
+                             "Default batch sizing: at most 2000000 precursor candidate associations.\n";
                 return 0;
             }
-            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--match-backend" && key!="--spectrum-cache" && key!="--peptide-generation" && key!="--result-restoration" && key!="--rt-scan-group-size" && key!="--rt-workspace-mib")
+            if (key!="-f" && key!="-c" && key!="-fasta" && key!="-o" && key!="-t" && key!="--peptide-batch-size" && key!="--candidate-batch-size" && key!="--match-backend" && key!="--spectrum-cache" && key!="--peptide-generation" && key!="--result-restoration" && key!="--rt-scan-group-size" && key!="--rt-workspace-mib" && key!="--rt-hit-filter")
                 throw std::runtime_error("Unknown option: "+key);
             if (++i==argc || options.count(key)) throw std::runtime_error("Missing/duplicate option: "+key);
             options[key]=argv[i];
@@ -43,6 +44,7 @@ int main(int argc, char **argv) {
             if(used!=value.size())throw std::runtime_error("Invalid RT workspace size");
             mvh_cuda::setRtWorkspaceMiB(size);
         }
+        if(options.count("--rt-hit-filter"))mvh_cuda::setRtHitFilter(options["--rt-hit-filter"]);
         mvh_cuda::setScoreImpact(scoreImpact);
         if(options.count("--result-restoration"))mvh_cuda::setResultRestoration(options["--result-restoration"]);
         if (options.count("--peptide-generation")) mvh_cuda::setPeptideGeneration(options["--peptide-generation"]);
@@ -59,6 +61,14 @@ int main(int argc, char **argv) {
             std::size_t used=0;
             threads=std::stoi(options["-t"], &used);
             if (used!=options["-t"].size() || threads<1) throw std::runtime_error("Invalid thread count");
+        }
+        if(options.count("--peptide-batch-size") && options.count("--candidate-batch-size"))
+            throw std::runtime_error("Choose candidate or generated-peptide batch sizing, not both");
+        if(options.count("--candidate-batch-size")) {
+            std::size_t used=0;const auto &text=options["--candidate-batch-size"];
+            int size=std::stoi(text,&used);
+            if(used!=text.size() || size<1)throw std::runtime_error("Invalid candidate batch size");
+            mvh_cuda::setCandidateBatchSize(size);
         }
         if (options.count("--peptide-batch-size")) {
             std::size_t used=0;

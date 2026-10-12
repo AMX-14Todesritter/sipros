@@ -29,6 +29,8 @@ bool scoreImpactEnabled = false;
 std::unique_ptr<ScoreImpactWriter> scoreImpactWriter;
 std::string matchBackend="cuda";
 int batchSize=2000000;
+int candidateLimit=2000000;
+bool candidateSizedBatches=true;
 bool useIonCache=true;
 bool keepSpectraOnDevice=false;
 struct PreparedPeptides {
@@ -176,6 +178,21 @@ void setRtScanGroupSize(int size) {
     throw std::runtime_error("RT scan grouping requires an RT-enabled build");
 #endif
 }
+void setRtHitFilter(const std::string& mode) {
+    require(mode=="scan" || mode=="off","--rt-hit-filter must be scan or off");
+#ifdef MVH_CUDA_ENABLE_RT
+    mvh_rt_gpu::setEarlyScanFilter(mode=="scan");
+#else
+    require(mode=="off","RT hit filtering requires an RT-enabled build");
+#endif
+}
+const char* rtHitFilterName() {
+#ifdef MVH_CUDA_ENABLE_RT
+    return mvh_rt_gpu::earlyScanFilter() ? "scan" : "off";
+#else
+    return "off";
+#endif
+}
 void setRtWorkspaceMiB(int size) {
 #ifdef MVH_CUDA_ENABLE_RT
     mvh_rt_gpu::setWorkspaceMiB(size);
@@ -201,8 +218,11 @@ void setMatchBackend(const std::string &name) {
     else if (name!="cuda") std::cout << "[RT backend] " << name
         << "; experimental unshifted triangles; known zero-distance/boundary differences\n";
 }
-void setPeptideBatchSize(int size) { require(size > 0, "batch size must be positive"); batchSize = size; }
+void setPeptideBatchSize(int size) { require(size > 0, "batch size must be positive"); batchSize = size; candidateSizedBatches=false; }
 int peptideBatchSize() { return batchSize; }
+void setCandidateBatchSize(int size) { require(size>0,"candidate batch size must be positive");candidateLimit=size;candidateSizedBatches=true; }
+int candidateBatchSize() { return candidateLimit; }
+const char* batchSizingName() { return candidateSizedBatches ? "candidates" : "generated-peptides"; }
 void setSpectrumDeviceCache(bool enabled) { keepSpectraOnDevice = enabled; }
 bool spectrumDeviceCache() { return keepSpectraOnDevice; }
 
@@ -368,6 +388,62 @@ uint64_t exclusiveOffsets(Buffer<uint64_t> &counts, Buffer<uint64_t> &offsets) {
     check(cudaMemcpy(&total, offsets.p + offsets.n - 1, sizeof(total), cudaMemcpyDeviceToHost));
     return total;
 }
+}
+
+size_t assignedCandidateCount() {
+    require(bool(assignedBatch),"Candidate assignment missing");return assignedBatch->candidates->n;
+}
+
+struct CandidateBatchCounter::Impl {
+    Buffer<Precursor> precursors;
+    Buffer<MassWindow> windows;
+    Buffer<double> masses;
+    Buffer<MassRange> ranges;
+    Buffer<int> rangeCounts;
+    Buffer<uint64_t> counts;
+    std::vector<Precursor> hostPrecursors;
+    std::vector<MassWindow> hostWindows;
+    Impl(const std::vector<std::tuple<double,int,MS2Scan*>>& source,
+         const std::vector<MS2Scan*>& scans) {
+        initialize();
+        std::unordered_map<const MS2Scan*,int> ids;
+        for(size_t i=0;i<scans.size();++i)ids.emplace(scans[i],int(i));
+        for(const auto &p:source)hostPrecursors.push_back({std::get<0>(p),ids.at(std::get<2>(p)),std::get<1>(p)});
+        std::vector<std::pair<double,double>> configured;
+        ProNovoConfig::getPeptideMassWindows(0,configured);
+        for(const auto &w:configured)hostWindows.push_back({w.first,w.second});
+        precursors.upload(hostPrecursors);windows.upload(hostWindows);
+    }
+};
+CandidateBatchCounter::CandidateBatchCounter(const std::vector<std::tuple<double,int,MS2Scan*>>& precursors,
+                                            const std::vector<MS2Scan*>& scans)
+    : impl(std::make_unique<Impl>(precursors,scans)) {}
+CandidateBatchCounter::~CandidateBatchCounter()=default;
+std::vector<uint64_t> CandidateBatchCounter::count(const std::vector<double>& hostMasses) {
+    require(hostMasses.size()<=65536,"Candidate counting lookahead exceeds 65536 peptides");
+    auto &w=*impl;const int n=hostMasses.size();
+    w.masses.upload(hostMasses);w.ranges.resize(size_t(n)*w.windows.n);
+    w.rangeCounts.resize(n);w.counts.resize(n);
+    if(n)GetAllRangeFromMass<<<(n+127)/128,128>>>(w.masses.p,n,w.precursors.p,w.precursors.n,
+        w.windows.p,w.windows.n,w.ranges.p,w.rangeCounts.p,w.counts.p);
+    check(cudaGetLastError());std::vector<uint64_t> result;w.counts.read(result);
+    if(verification)for(int i=0;i<n;++i) {
+        MassRange previous{-1,-1};uint64_t expected=0;
+        for(const auto &window:w.hostWindows) {
+            auto first=std::lower_bound(w.hostPrecursors.begin(),w.hostPrecursors.end(),hostMasses[i]+window.lower,
+                [](const Precursor &p,double mass){return p.mass<mass;});
+            auto last=std::upper_bound(w.hostPrecursors.begin(),w.hostPrecursors.end(),hostMasses[i]+window.upper,
+                [](double mass,const Precursor &p){return mass<p.mass;});
+            if(first==last)continue;
+            MassRange next{int(first-w.hostPrecursors.begin()),int(last-w.hostPrecursors.begin())-1};
+            if(previous.first<0)previous=next;
+            else if(previous.last>next.first)previous.last=next.last;
+            else {expected+=previous.last-previous.first+1;previous=next;}
+        }
+        if(previous.first>=0)expected+=previous.last-previous.first+1;
+        require(result[i]==expected,"Candidate lookahead count differs from CPU reference");
+    }
+    return result;
 }
 
 void assignPeptides2Scans(const PeptideBatch &peptides,

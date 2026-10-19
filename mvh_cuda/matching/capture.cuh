@@ -82,7 +82,7 @@ bool captureBatch(const std::vector<mvh_cuda::Scan>& hostScans,
     const double* peaks, const int* classes, size_t peakCount,
     const short* hub, size_t hubCount, const mvh_cuda::Config& cfg,
     const uint64_t* cachedOffsets, const int* cachedValid,
-    const double* cachedIons, int stride) {
+    const double* cachedIons, int stride, size_t textCount, const double* lnTable, size_t lnCount) {
     using namespace mvh_cuda;
     if(!captureEnabled || captureDone || !size) return false;
     const uint16_t endian=1;
@@ -96,6 +96,15 @@ bool captureBatch(const std::vector<mvh_cuda::Scan>& hostScans,
     dumpDevice("peaks.f64",peaks,peakCount);
     dumpDevice("classes.i32",classes,peakCount);
     dumpDevice("hub.i16",hub,hubCount);
+    // ABI-tagged extension for controlled generation/matching/MVH replays.
+    dumpDevice("fusion_peptides.bin",peptides,peptideCount);
+    dumpDevice("fusion_texts.bin",texts,textCount);
+    dumpDevice("fusion_ln.f64",lnTable,lnCount);
+    {auto f=binaryFile("fusion_config.bin");f.write(reinterpret_cast<const char*>(&cfg),sizeof(cfg));}
+    {auto f=binaryFile("fusion_scans.bin");writeValues(f,hostScans);}
+    {std::ofstream f(captureDirectory/"fusion_abi.json");
+     f<<"{\"version\":1,\"scan_bytes\":"<<sizeof(Scan)
+      <<",\"config_bytes\":"<<sizeof(Config)<<",\"peptide_bytes\":"<<sizeof(PeptideInput)<<"}\n";}
     auto sf=binaryFile("scans.bin");
     for(const auto& s:hostScans) {
         const uint64_t offsets[]={s.peakOffset,s.hubOffset};

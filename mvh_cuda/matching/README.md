@@ -282,3 +282,106 @@ is still uploaded by the common replay setup.
 The full real-input control outputs are under
 `output/benchmarks/matching_no_bin_20261019/` (7 repeats, 2 warmups per chunk,
 1,000,000 candidate groups per chunk, per-query output).
+
+### Controlled generation / matching / MVH fusion experiment
+
+`matching_fusion_replay` compares three compile-time GPU paths and equivalent
+OpenMP CPU paths, using the same captured candidate order and spectra:
+
+| Mode | Work inside timed compute |
+| --- | --- |
+| `precomputed` | Read captured theoretical m/z, match and accumulate classes |
+| `generate_match` | Generate theoretical ions, match and accumulate classes |
+| `generate_match_mvh` | Generate ions, match, accumulate and compute MVH |
+
+All modes write the same `FusionOutput` (class bins, raw peak-hit count,
+predicted/scored match counts, status and score). Modes without MVH leave score
+zero; the MVH mode follows the original candidate scorer's insufficient/invalid
+rules. No mode performs top-list retention, FDR or peptide generation from FASTA.
+CUDA retains exact integer-bin lookup; RT uses sphere tracing followed by a
+strict double-precision tolerance check on each returned peak, with no bin
+prefilter. The postcheck is specific to fusion replay; existing production and
+ordinary replay sphere paths are unchanged. No theoretical-ion cache is used by generation replay paths.
+Each GPU kernel/raygen handles one candidate; CUDA uses 128-thread blocks.
+CUDA configuration and RT launch configuration reside in read-only constant
+memory, not per-thread copies. CUDA and RT modes are compiled separately so an
+unused generation/MVH path cannot inflate the matching-only kernel's resources.
+
+CPU and GPU use the shared `ion_math.cuh` and `fusion.cuh` algorithms. Host
+floating-point contraction is disabled except explicit `std::fma` matching
+explicit CUDA FMA. CPU is an algorithm-controlled baseline, not the original
+Sipros CPU executable or an end-to-end CPU speedup claim. `--threads` controls a
+static OpenMP candidate loop; dynamic team sizing is disabled and actual thread
+count is reported. `--backends cpu` runs without initializing CUDA/OptiX and is
+tested with `CUDA_VISIBLE_DEVICES` empty; the executable still needs its linked
+runtime libraries installed. Thread pinning follows OpenMP/environment settings.
+
+The capture now optionally includes `fusion_scans.bin`, `fusion_config.bin`,
+`fusion_peptides.bin`, `fusion_texts.bin`, `fusion_ln.f64`, and `fusion_abi.json`.
+These extend capture v1 without changing its original files. Native struct
+layouts are checked against the ABI tag; use matching little-endian builds.
+Existing captures without the extension must be recaptured. New captures remain
+opt-in using `sipros_mvh_cuda --capture-matching`.
+
+Example inside the existing container (repository `/workspace/sipros`):
+
+```sh
+export LD_LIBRARY_PATH=/workspace/sipros/build/mvh_rt/optix_runtime:/usr/local/cuda/lib64
+build/mvh_rt/gpu_integration/bin/matching_fusion_replay \
+  --capture output/benchmarks/matching_fusion_20261019/real_capture/matching_capture \
+  --output output/benchmarks/fusion_repeat_t8 \
+  --backends cpu,cuda,rt --threads 8 --chunk-groups 1000000 \
+  --repeats 5 --warmup 1
+```
+
+Use `--backends cpu --threads 1` (or 4/8/32) and a new output directory for
+CPU-only scaling. `--max-chunks N` selects an identical candidate prefix for
+all modes/backends; zero means full capture. Output directories must be new.
+
+Before timing, an OpenMP audit checks every regenerated host m/z bit-for-bit
+against the captured GPU query stream, including query counts and validity.
+Outside timing, each GPU candidate is compared against the CPU result; bins,
+counts and status must be exact, score error at most `1e-10 * max(1, |score|)`.
+CPU reference summary checksums must also agree across all three modes. By
+default, a mismatch aborts and never writes `complete=true`. The original scoring contract separately checks
+MVH against a hand-calculated example and the original CUDA scorer, including
+invalid charge, skipped scan, insufficient matches and empty spectra.
+
+CPU uses wall-clock time around its OpenMP compute loop. GPU uses CUDA events
+around only the kernel/OptiX launch after parameters are staged. Repeats rotate
+backend order. Per-chunk times are summed for each repeat; reported values are
+medians of these totals. Setup, generation audit, uploads, BVH builds, validation
+and file I/O are excluded, with setup timings recorded separately. `samples.tsv`
+retains every measured chunk/repeat, `comparison.tsv` the aggregate values, and
+`result.json` records successful validation. No profiler is active in these runs.
+The equal output contract differs from earlier 4-byte/query or 40-byte/candidate
+replays, so compare fusion modes within this harness rather than mixing runtimes.
+
+Marine/E.coli validation exposed a float-geometry boundary false positive:
+query `608.83258996688005`, peak `608.84259`, distance
+`0.010000033119922591` Da versus tolerance `0.01` Da. Fusion RT now rejects
+such returned peaks using `validateRtPeak`. This does not add a bin lookup or
+exhaustive search. A postcheck alone is not a general proof against float
+false negatives or nearest-peak ties; every dataset is still compared against
+CPU/CUDA. The initial failure, diagnosis, corrected Marine run and a 293T
+reference rerun using the same corrected executable are retained under
+`output/benchmarks/matching_fusion_marine_ecoli_x1_20261019/`.
+
+### RT postcheck ablation
+
+`matching_fusion_replay --rt-postcheck off` selects three separately compiled
+sphere PTX modules without the double-precision hit postcheck. The default is
+`--rt-postcheck on`. No runtime branch is added to the timed shaders. Class
+accumulation, candidate output layout and MVH work remain identical.
+
+With postcheck off, RT discrepancies are counted outside timing rather than
+aborting on the first one; CPU/CUDA discrepancies still abort. The first 20
+RT examples per mode are written to `result_mismatches.tsv`. `result.json`
+records `rt_postcheck`, `rt_mismatches_by_mode`, `results_equivalent`, and
+`rt_equivalent_performance_comparison_valid`. In this ablation, `complete=true`
+means all measurement and comparison work finished, not that RT results were
+equivalent. A false equivalence flag must accompany any reported RT timing.
+The common generation audit remains mandatory for both settings.
+
+Full Marine/E.coli X1 on/off results using the same captured input and binary
+are under `output/benchmarks/matching_fusion_rt_postcheck_ablation_20261019/`.

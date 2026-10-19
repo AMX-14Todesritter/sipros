@@ -19,6 +19,7 @@ struct SphereState {
     float rayTmax = 0;
     int stagedQueries = 0;
     bool aggregate=false;
+    int fusionMode=-1;
 };
 std::unique_ptr<SphereState> state;
 
@@ -34,13 +35,13 @@ void validateConfiguration(const mvh_cuda::Config& config) {
 void reset() { state.reset(); }
 
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
-             const int* classes, size_t peakCount, const mvh_cuda::Config& config,bool aggregate) {
+             const int* classes, size_t peakCount, const mvh_cuda::Config& config,bool aggregate,int fusionMode) {
     validateConfiguration(config);
     if (peakCount && (!peaks || !classes))
         throw std::runtime_error("Sphere RT requires peak masses and classes");
     if (state) {
         state->scene.requireSameLayout(scans);
-        if (state->fragmentTolerance != config.fragmentTolerance || state->classCount != config.classes || state->aggregate!=aggregate)
+        if (state->fragmentTolerance != config.fragmentTolerance || state->classCount != config.classes || state->aggregate!=aggregate || state->fusionMode!=fusionMode)
             throw std::runtime_error("Sphere RT configuration changed without reset");
         return;
     }
@@ -48,9 +49,17 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     auto next = std::make_unique<SphereState>();
     next->scene.layout = scans;
     next->fragmentTolerance = config.fragmentTolerance;
-    next->classCount = config.classes;next->aggregate=aggregate;
+    next->classCount = config.classes;next->aggregate=aggregate;next->fusionMode=fusionMode;
     initializeOptix(next->scene.objects);
-    createPipeline(next->scene.objects, aggregate?MVH_GPU_RT_AGGREGATE_PTX_PATH:MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
+    const char* ptx=aggregate?MVH_GPU_RT_AGGREGATE_PTX_PATH:MVH_GPU_RT_CUSTOM_PTX_PATH;
+#ifdef MVH_GPU_RT_FUSION_0_PTX_PATH
+    const char* fusionPtx[]={MVH_GPU_RT_FUSION_0_PTX_PATH,MVH_GPU_RT_FUSION_1_PTX_PATH,MVH_GPU_RT_FUSION_2_PTX_PATH,MVH_GPU_RT_FUSION_3_PTX_PATH,MVH_GPU_RT_FUSION_4_PTX_PATH,MVH_GPU_RT_FUSION_5_PTX_PATH};
+    if(fusionMode>=0 && fusionMode<=5)ptx=fusionPtx[fusionMode];
+    else if(fusionMode!=-1)throw std::invalid_argument("Invalid fusion mode");
+#else
+    if(fusionMode!=-1)throw std::invalid_argument("Fusion pipeline unavailable in this build");
+#endif
+    createPipeline(next->scene.objects,ptx,false,PrimitiveKind::Sphere);
 
     const float radius = static_cast<float>(config.fragmentTolerance);
     const auto offsets = sphereCenterOffsets(peaks, peakCount, config.fragmentTolerance);
@@ -118,7 +127,7 @@ void stage(Params params) {
     params.rayTmax = state->rayTmax;
     params.instanced = false;
     state->scene.stage(params);
-    state->stagedQueries = (params.matchQueries || params.matchGroups) ? params.size : 0;
+    state->stagedQueries = (params.matchQueries || params.matchGroups || params.fusionOutputs) ? params.size : 0;
 }
 
 void launchStagedMatching() {

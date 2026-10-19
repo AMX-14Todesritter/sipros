@@ -63,5 +63,5 @@ struct ScoringEvent { Candidate candidate; Result result; int candidateIndex, to
 // source >= 0: accepted candidate index in this batch; source < 0: -(old rank+1).
 struct Top { double score; int sequenceId; int source=-1; };
 struct Rule { int fromLen,toLen; char from[MaxText],to[MaxText]; };
-__device__ inline bool alpha(char c){return (c>='A'&&c<='Z')||(c>='a'&&c<='z');}
+__host__ __device__ inline bool alpha(char c){return (c>='A'&&c<='Z')||(c>='a'&&c<='z');}
 }

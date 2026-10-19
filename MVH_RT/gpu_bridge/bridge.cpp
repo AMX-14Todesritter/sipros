@@ -16,14 +16,14 @@ void reset() {
 void prepare(const std::vector<mvh_cuda::Scan>& scans,
              const mvh_cuda::Scan* deviceScans, const double* devicePeaks,
              const int* deviceClasses, size_t peakCount, GeometryKind geometry,
-             const mvh_cuda::Config& config,bool aggregate) {
+             const mvh_cuda::Config& config,bool aggregate,int fusionMode) {
     if(aggregate && geometry!=GeometryKind::Spheres)throw std::invalid_argument("Aggregate replay requires spheres");
     if (activeGeometry && *activeGeometry != geometry)
         throw std::runtime_error("RT backend changed without reset");
 
     switch (geometry) {
     case GeometryKind::Spheres:
-        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config,aggregate);
+        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config,aggregate,fusionMode);
         break;
     case GeometryKind::Triangles:
     case GeometryKind::InstancedTriangles:
@@ -69,6 +69,12 @@ void launchStagedMatching() {
     if (!activeGeometry || *activeGeometry != GeometryKind::Spheres)
         throw std::runtime_error("Matching-only launch requires prepared sphere geometry");
     sphere_backend::launchStagedMatching();
+}
+
+void stageFusion(Params params) {
+    if(!activeGeometry || *activeGeometry!=GeometryKind::Spheres || !params.fusionOutputs || !params.candidates || !params.fusionValidity)
+        throw std::invalid_argument("Invalid fusion staging");
+    sphere_backend::stage(params);
 }
 
 void stageGroupedMatching(const mvh_cuda::Scan* scans,

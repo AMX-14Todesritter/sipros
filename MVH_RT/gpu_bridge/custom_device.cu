@@ -50,9 +50,35 @@ extern "C" __global__ void __miss__background() {
     optixSetPayload_0(NoPeak);
 }
 
+#ifdef MVH_FUSION_MODE
+namespace {
+struct FusionRtLookup {
+ OptixTraversableHandle handle;
+ const mvh_cuda::Scan* scan;
+ __device__ int operator()(double mz)const{
+  const auto peak=tracePeak(params,handle,mz);
+#ifdef MVH_FUSION_RT_NO_POSTCHECK
+  return peak==NoPeak?mvh_matching::NoPeak:int(peak);
+#else
+  return mvh_matching::validateRtPeak(peak==NoPeak?mvh_matching::NoPeak:int(peak),mz,*scan,params.peaks,params.cfg.fragmentTolerance);
+#endif
+ }
+};
+}
+#endif
+
 // One launch index scores one candidate. Its theoretical ions each call add().
 extern "C" __global__ void __raygen__camera() {
     const int index = optixGetLaunchIndex().x;
+#ifdef MVH_FUSION_MODE
+    const auto c=params.candidates[index];
+    const auto& scan=params.scans[c.scanId];
+    params.fusionOutputs[index]=mvh_matching::evaluateFusion<MVH_FUSION_MODE>(scan,c,
+        params.peptides,params.texts,params.classes,params.lnTable,params.cfg,params.matchMz,
+        params.matchOffsets[index]-params.matchBase,params.matchOffsets[index+1]-params.matchBase,
+        params.fusionValidity[index],FusionRtLookup{params.handles[c.scanId],&scan});
+    return;
+#endif
     if (params.matchGroups) {
         const int scanId=params.matchGroups[index].scanId;
         const auto handle=params.handles[scanId];

@@ -2,6 +2,7 @@
 #include "types.cuh"
 #include "../../mvh_cuda/matching/matching.cuh"
 #include <optix.h>
+#include "../../mvh_cuda/matching/fusion.cuh"
 
 namespace mvh_rt_gpu {
 enum class GeometryKind { Triangles, InstancedTriangles, Spheres };
@@ -28,6 +29,8 @@ struct Params {
     float rayTmax;
     mvh_matching::CandidateSummary* matchSummaries;
     // Optional matching-only mode. Null keeps the existing fused scoring path.
+    mvh_matching::FusionOutput* fusionOutputs;
+    const unsigned char* fusionValidity;
     const mvh_matching::Query *matchQueries;
     int *matchResults;
     const mvh_cuda::Candidate *matchGroups;
@@ -45,7 +48,7 @@ void prepare(
     const int* deviceClasses,
     size_t peakCount,
     GeometryKind geometry,
-    const mvh_cuda::Config& config,bool aggregate=false);
+    const mvh_cuda::Config& config,bool aggregate=false,int fusionMode=-1);
 void launch(Params params);
 // prepare(Spheres) must have completed. Only matching executes in this launch.
 void launchMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
@@ -55,6 +58,7 @@ void launchMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* quer
 void stageMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
                    int count, int* results, const mvh_cuda::Config& config);
 void launchStagedMatching();
+void stageFusion(Params params);
 void stageGroupedMatching(const mvh_cuda::Scan* scans,
     const mvh_cuda::Candidate* groups, const uint64_t* offsets, const double* mz,
     uint64_t base, int count, int* results, const mvh_cuda::Config& config,

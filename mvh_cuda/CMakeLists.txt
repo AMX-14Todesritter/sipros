@@ -85,7 +85,7 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/device.cu" -o "${GPU_RT_PTX}"
     DEPENDS "${GPU_RT_DIR}/device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh matching/matching.cuh matching/diagnostics.cuh
+      cuda/types.cuh cuda/scoring.cuh cuda/ion_math.cuh matching/fusion.cuh matching/matching.cuh matching/diagnostics.cuh
       "${GPU_RT_DIR}/sphere_matching.cuh" VERBATIM)
   add_custom_target(mvh_gpu_rt_ptx DEPENDS "${GPU_RT_PTX}")
   set(GPU_RT_CUSTOM_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_custom.ptx")
@@ -95,7 +95,7 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_CUSTOM_PTX}"
     DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh matching/matching.cuh matching/diagnostics.cuh
+      cuda/types.cuh cuda/scoring.cuh cuda/ion_math.cuh matching/fusion.cuh matching/matching.cuh matching/diagnostics.cuh
       "${GPU_RT_DIR}/sphere_matching.cuh" VERBATIM)
   add_custom_target(mvh_gpu_rt_custom_ptx DEPENDS "${GPU_RT_CUSTOM_PTX}")
   foreach(variant IN ITEMS aggregate aggregate_diagnostics)
@@ -111,8 +111,26 @@ if(MVH_CUDA_ENABLE_RT)
         "${GPU_RT_DIR}/custom_device.cu" -o "${AGGREGATE_PTX_${variant}}"
       DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
         "${GPU_RT_DIR}/sphere_matching.cuh" cuda/types.cuh cuda/scoring.cuh
-        matching/matching.cuh matching/diagnostics.cuh VERBATIM)
+        cuda/ion_math.cuh matching/fusion.cuh matching/matching.cuh matching/diagnostics.cuh VERBATIM)
     add_custom_target(mvh_gpu_rt_${variant}_ptx DEPENDS "${AGGREGATE_PTX_${variant}}")
+  endforeach()
+
+  foreach(mode RANGE 0 5)
+    math(EXPR FUSION_ALGORITHM_MODE "${mode} % 3")
+    set(FUSION_POSTCHECK_DEFINES)
+    if(mode GREATER_EQUAL 3)
+      list(APPEND FUSION_POSTCHECK_DEFINES -DMVH_FUSION_RT_NO_POSTCHECK=1)
+    endif()
+    set(FUSION_PTX_${mode} "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_fusion_${mode}.ptx")
+    add_custom_command(OUTPUT "${FUSION_PTX_${mode}}"
+      COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+        --generate-line-info --fmad=false -DMVH_FUSION_MODE=${FUSION_ALGORITHM_MODE} ${FUSION_POSTCHECK_DEFINES}
+        "-I${OPTIX_INCLUDE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
+        "${GPU_RT_DIR}/custom_device.cu" -o "${FUSION_PTX_${mode}}"
+      DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
+        "${GPU_RT_DIR}/sphere_matching.cuh" cuda/types.cuh cuda/scoring.cuh
+        cuda/ion_math.cuh matching/fusion.cuh matching/matching.cuh matching/diagnostics.cuh VERBATIM)
+    add_custom_target(mvh_gpu_rt_fusion_${mode}_ptx DEPENDS "${FUSION_PTX_${mode}}")
   endforeach()
 
   add_library(mvh_gpu_rt STATIC "${GPU_RT_DIR}/bridge.cpp"
@@ -125,6 +143,26 @@ if(MVH_CUDA_ENABLE_RT)
     MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_CUSTOM_PTX}"
     MVH_GPU_RT_AGGREGATE_PTX_PATH="${AGGREGATE_PTX_aggregate}")
   add_dependencies(mvh_gpu_rt mvh_gpu_rt_ptx mvh_gpu_rt_custom_ptx mvh_gpu_rt_aggregate_ptx)
+  target_compile_definitions(mvh_gpu_rt PRIVATE
+    MVH_GPU_RT_FUSION_0_PTX_PATH="${FUSION_PTX_0}"
+    MVH_GPU_RT_FUSION_1_PTX_PATH="${FUSION_PTX_1}"
+    MVH_GPU_RT_FUSION_2_PTX_PATH="${FUSION_PTX_2}"
+    MVH_GPU_RT_FUSION_3_PTX_PATH="${FUSION_PTX_3}"
+    MVH_GPU_RT_FUSION_4_PTX_PATH="${FUSION_PTX_4}"
+    MVH_GPU_RT_FUSION_5_PTX_PATH="${FUSION_PTX_5}")
+  add_dependencies(mvh_gpu_rt mvh_gpu_rt_fusion_0_ptx mvh_gpu_rt_fusion_1_ptx mvh_gpu_rt_fusion_2_ptx mvh_gpu_rt_fusion_3_ptx mvh_gpu_rt_fusion_4_ptx mvh_gpu_rt_fusion_5_ptx)
+  add_executable(matching_fusion_replay matching/fusion_replay.cu)
+  target_link_libraries(matching_fusion_replay PRIVATE mvh_matching mvh_gpu_rt OpenMP::OpenMP_CXX)
+  target_compile_options(matching_fusion_replay PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-lineinfo;-Xcompiler=-fopenmp;-Xcompiler=-ffp-contract=off>)
+  set_target_properties(matching_fusion_replay PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  add_executable(matching_fusion_contract tests/fusion_contract.cu)
+  target_link_libraries(matching_fusion_contract PRIVATE mvh_matching)
+  target_compile_options(matching_fusion_contract PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-Xcompiler=-ffp-contract=off>)
+  add_test(NAME matching_fusion_original_scoring_contract COMMAND matching_fusion_contract)
+  add_test(NAME matching_fusion_replay_contract COMMAND ${Python3_EXECUTABLE} -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fusion_replay.py"
+    --search $<TARGET_FILE:sipros_mvh_cuda> --replay $<TARGET_FILE:matching_fusion_replay>
+    --root "${SIPROS_ROOT}")
   target_link_libraries(mvh_original PUBLIC mvh_gpu_rt)
   target_compile_definitions(mvh_original PRIVATE MVH_CUDA_ENABLE_RT=1)
   add_executable(mvh_gpu_rt_contract "${GPU_RT_DIR}/contract.cpp")
@@ -202,7 +240,7 @@ if(MVH_CUDA_ENABLE_RT)
       "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_DIAGNOSTIC_PTX}"
     DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
       "${GPU_RT_DIR}/sphere_matching.cuh" cuda/scoring.cuh cuda/types.cuh
-      matching/matching.cuh matching/diagnostics.cuh VERBATIM)
+      cuda/ion_math.cuh matching/fusion.cuh matching/matching.cuh matching/diagnostics.cuh VERBATIM)
   add_custom_target(mvh_gpu_rt_diagnostic_ptx DEPENDS "${GPU_RT_DIAGNOSTIC_PTX}")
   get_target_property(DIAGNOSTIC_RT_SOURCES mvh_gpu_rt SOURCES)
   add_library(mvh_gpu_rt_diagnostics STATIC ${DIAGNOSTIC_RT_SOURCES})

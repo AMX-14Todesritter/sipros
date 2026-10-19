@@ -814,7 +814,7 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         peptides.p, batch.peptides.size(), texts.p, peaks.p, classes.p, peaks.n,
         buckets.p, buckets.n, config, ionOffsets ? ionOffsets->p : nullptr,
         active ? active->p : nullptr, cachedIons ? cachedIons->p : nullptr,
-        output.chargeStride)) {
+        output.chargeStride, texts.n, table.p, table.n)) {
         std::ofstream mapping;
         mapping.exceptions(std::ios::badbit | std::ios::failbit);
         mapping.open(mvh_matching::captureDirectory / "scan_sources.tsv");

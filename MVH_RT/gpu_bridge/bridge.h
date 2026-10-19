@@ -1,5 +1,6 @@
 #pragma once
 #include "types.cuh"
+#include "../../mvh_cuda/matching/matching.cuh"
 #include <optix.h>
 
 namespace mvh_rt_gpu {
@@ -25,6 +26,15 @@ struct Params {
     const unsigned *spherePeakIndices;
     float rayOriginY;
     float rayTmax;
+    mvh_matching::CandidateSummary* matchSummaries;
+    // Optional matching-only mode. Null keeps the existing fused scoring path.
+    const mvh_matching::Query *matchQueries;
+    int *matchResults;
+    const mvh_cuda::Candidate *matchGroups;
+    const uint64_t *matchOffsets;
+    const double *matchMz;
+    uint64_t matchBase;
+    mvh_matching::Statistics *matchStatistics;
 };
 // Resources persist across peptide batches and reset for each input dataset.
 void reset();
@@ -35,6 +45,19 @@ void prepare(
     const int* deviceClasses,
     size_t peakCount,
     GeometryKind geometry,
-    const mvh_cuda::Config& config);
+    const mvh_cuda::Config& config,bool aggregate=false);
 void launch(Params params);
+// prepare(Spheres) must have completed. Only matching executes in this launch.
+void launchMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
+                    int count, int* results, const mvh_cuda::Config& config);
+// Stage uploads launch parameters once, outside matching-only event timing.
+// Buffers must stay alive; reset or a scoring launch invalidates this staging.
+void stageMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
+                   int count, int* results, const mvh_cuda::Config& config);
+void launchStagedMatching();
+void stageGroupedMatching(const mvh_cuda::Scan* scans,
+    const mvh_cuda::Candidate* groups, const uint64_t* offsets, const double* mz,
+    uint64_t base, int count, int* results, const mvh_cuda::Config& config,
+    mvh_matching::Statistics* statistics = nullptr,
+    mvh_matching::CandidateSummary* summaries=nullptr,const int* classes=nullptr);
 }

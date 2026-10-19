@@ -24,13 +24,18 @@ set(ORIGINAL_SOURCES
   original/src/peptide.cpp
   original/src/proNovoConfig.cpp original/src/proteindatabase.cpp
   original/src/ptm.cpp original/src/tokenvector.cpp)
+add_library(mvh_matching STATIC matching/matching.cu)
+target_include_directories(mvh_matching PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cuda"
+  "${CMAKE_CURRENT_SOURCE_DIR}/matching")
+target_link_libraries(mvh_matching PUBLIC CUDA::cudart)
+target_compile_options(mvh_matching PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-lineinfo>)
 add_library(mvh_original STATIC ${ORIGINAL_SOURCES}
   src/mvh_scan_vector.cpp src/spectrum_input.cpp src/database_search.cpp cuda/engine.cu cuda/score_impact.cu cuda/peptide_generation.cu src/generation_mass.cpp)
 target_include_directories(mvh_original PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/cuda"
   "${CMAKE_CURRENT_SOURCE_DIR}/original/include")
-target_link_libraries(mvh_original PUBLIC mstoolkit OpenMP::OpenMP_CXX CUDA::cudart)
+target_link_libraries(mvh_original PUBLIC mstoolkit OpenMP::OpenMP_CXX CUDA::cudart mvh_matching)
 if(MSVC)
   target_compile_options(mvh_original PRIVATE /fp:fast /openmp:experimental /openmp:llvm /arch:AVX2)
 else()
@@ -80,7 +85,8 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/device.cu" -o "${GPU_RT_PTX}"
     DEPENDS "${GPU_RT_DIR}/device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh matching/matching.cuh matching/diagnostics.cuh
+      "${GPU_RT_DIR}/sphere_matching.cuh" VERBATIM)
   add_custom_target(mvh_gpu_rt_ptx DEPENDS "${GPU_RT_PTX}")
   set(GPU_RT_CUSTOM_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_custom.ptx")
   add_custom_command(OUTPUT "${GPU_RT_CUSTOM_PTX}"
@@ -89,8 +95,26 @@ if(MVH_CUDA_ENABLE_RT)
       "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
       "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_CUSTOM_PTX}"
     DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
-      cuda/types.cuh cuda/scoring.cuh VERBATIM)
+      cuda/types.cuh cuda/scoring.cuh matching/matching.cuh matching/diagnostics.cuh
+      "${GPU_RT_DIR}/sphere_matching.cuh" VERBATIM)
   add_custom_target(mvh_gpu_rt_custom_ptx DEPENDS "${GPU_RT_CUSTOM_PTX}")
+  foreach(variant IN ITEMS aggregate aggregate_diagnostics)
+    set(AGGREGATE_PTX_${variant} "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_${variant}.ptx")
+    set(AGGREGATE_DEFINES -DMVH_MATCHING_AGGREGATE=1)
+    if(variant STREQUAL "aggregate_diagnostics")
+      list(APPEND AGGREGATE_DEFINES -DMVH_MATCHING_DIAGNOSTICS=1)
+    endif()
+    add_custom_command(OUTPUT "${AGGREGATE_PTX_${variant}}"
+      COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+        --generate-line-info --fmad=false ${AGGREGATE_DEFINES}
+        "-I${OPTIX_INCLUDE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
+        "${GPU_RT_DIR}/custom_device.cu" -o "${AGGREGATE_PTX_${variant}}"
+      DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
+        "${GPU_RT_DIR}/sphere_matching.cuh" cuda/types.cuh cuda/scoring.cuh
+        matching/matching.cuh matching/diagnostics.cuh VERBATIM)
+    add_custom_target(mvh_gpu_rt_${variant}_ptx DEPENDS "${AGGREGATE_PTX_${variant}}")
+  endforeach()
+
   add_library(mvh_gpu_rt STATIC "${GPU_RT_DIR}/bridge.cpp"
     "${GPU_RT_DIR}/sphere_backend.cpp" "${GPU_RT_DIR}/triangle_backend.cpp"
     "${GPU_RT_DIR}/scene_resources.cpp" "${GPU_RT_DIR}/geometry.cu"
@@ -98,8 +122,9 @@ if(MVH_CUDA_ENABLE_RT)
   target_include_directories(mvh_gpu_rt PUBLIC "${GPU_RT_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/cuda")
   target_link_libraries(mvh_gpu_rt PUBLIC mvh_rt_support)
   target_compile_definitions(mvh_gpu_rt PRIVATE MVH_GPU_RT_PTX_PATH="${GPU_RT_PTX}"
-    MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_CUSTOM_PTX}")
-  add_dependencies(mvh_gpu_rt mvh_gpu_rt_ptx mvh_gpu_rt_custom_ptx)
+    MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_CUSTOM_PTX}"
+    MVH_GPU_RT_AGGREGATE_PTX_PATH="${AGGREGATE_PTX_aggregate}")
+  add_dependencies(mvh_gpu_rt mvh_gpu_rt_ptx mvh_gpu_rt_custom_ptx mvh_gpu_rt_aggregate_ptx)
   target_link_libraries(mvh_original PUBLIC mvh_gpu_rt)
   target_compile_definitions(mvh_original PRIVATE MVH_CUDA_ENABLE_RT=1)
   add_executable(mvh_gpu_rt_contract "${GPU_RT_DIR}/contract.cpp")
@@ -146,3 +171,88 @@ add_executable(instrument_precursor_contract tests/instrument_precursor_contract
 target_link_libraries(instrument_precursor_contract PRIVATE mvh_original)
 add_test(NAME instrument_precursor_contract COMMAND instrument_precursor_contract
   "${SIPROS_ROOT}/experiments/Regular.cfg" "${CMAKE_BINARY_DIR}")
+
+add_executable(matching_benchmark matching/benchmark.cpp)
+target_link_libraries(matching_benchmark PRIVATE mvh_matching OpenMP::OpenMP_CXX)
+if(MVH_CUDA_ENABLE_RT)
+  target_compile_definitions(matching_benchmark PRIVATE MATCHING_ENABLE_RT=1)
+  target_link_libraries(matching_benchmark PRIVATE mvh_gpu_rt)
+  add_executable(matching_replay matching/replay.cpp)
+  target_link_libraries(matching_replay PRIVATE mvh_matching mvh_gpu_rt)
+  set_target_properties(matching_replay PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+  # Exhaustive CUDA control, linked independently to retain the bin baseline.
+  add_library(mvh_matching_linear STATIC matching/matching.cu)
+  target_include_directories(mvh_matching_linear PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cuda" "${CMAKE_CURRENT_SOURCE_DIR}/matching")
+  target_link_libraries(mvh_matching_linear PUBLIC CUDA::cudart)
+  target_compile_definitions(mvh_matching_linear PRIVATE MVH_MATCHING_LINEAR=1)
+  target_compile_options(mvh_matching_linear PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-lineinfo>)
+  add_executable(matching_replay_no_bin matching/replay.cpp)
+  target_compile_definitions(matching_replay_no_bin PRIVATE MVH_MATCHING_LINEAR=1)
+  target_link_libraries(matching_replay_no_bin PRIVATE mvh_matching_linear mvh_gpu_rt)
+  set_target_properties(matching_replay_no_bin PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+  # Same algorithm sources, separate instrumented objects/PTX; never link both
+  # normal and instrumented libraries into one executable.
+  set(GPU_RT_DIAGNOSTIC_PTX "${CMAKE_CURRENT_BINARY_DIR}/gpu_rt_diagnostics.ptx")
+  add_custom_command(OUTPUT "${GPU_RT_DIAGNOSTIC_PTX}"
+    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+      --generate-line-info --fmad=false -DMVH_MATCHING_DIAGNOSTICS=1
+      "-I${OPTIX_INCLUDE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
+      "${GPU_RT_DIR}/custom_device.cu" -o "${GPU_RT_DIAGNOSTIC_PTX}"
+    DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
+      "${GPU_RT_DIR}/sphere_matching.cuh" cuda/scoring.cuh cuda/types.cuh
+      matching/matching.cuh matching/diagnostics.cuh VERBATIM)
+  add_custom_target(mvh_gpu_rt_diagnostic_ptx DEPENDS "${GPU_RT_DIAGNOSTIC_PTX}")
+  get_target_property(DIAGNOSTIC_RT_SOURCES mvh_gpu_rt SOURCES)
+  add_library(mvh_gpu_rt_diagnostics STATIC ${DIAGNOSTIC_RT_SOURCES})
+  target_include_directories(mvh_gpu_rt_diagnostics PUBLIC "${GPU_RT_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/cuda")
+  target_link_libraries(mvh_gpu_rt_diagnostics PUBLIC mvh_rt_support)
+  target_compile_definitions(mvh_gpu_rt_diagnostics PRIVATE MVH_GPU_RT_PTX_PATH="${GPU_RT_PTX}"
+    MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_DIAGNOSTIC_PTX}"
+    MVH_GPU_RT_AGGREGATE_PTX_PATH="${AGGREGATE_PTX_aggregate_diagnostics}")
+  add_dependencies(mvh_gpu_rt_diagnostics mvh_gpu_rt_ptx mvh_gpu_rt_diagnostic_ptx mvh_gpu_rt_aggregate_diagnostics_ptx)
+  add_library(mvh_matching_diagnostics STATIC matching/matching.cu)
+  target_include_directories(mvh_matching_diagnostics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cuda" "${CMAKE_CURRENT_SOURCE_DIR}/matching")
+  target_link_libraries(mvh_matching_diagnostics PUBLIC CUDA::cudart)
+  target_compile_definitions(mvh_matching_diagnostics PRIVATE MVH_MATCHING_DIAGNOSTICS=1)
+  target_compile_options(mvh_matching_diagnostics PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-lineinfo>)
+  add_executable(matching_replay_diagnostics matching/replay.cpp)
+  target_compile_definitions(matching_replay_diagnostics PRIVATE MVH_MATCHING_DIAGNOSTICS=1)
+  target_link_libraries(matching_replay_diagnostics PRIVATE mvh_matching_diagnostics mvh_gpu_rt_diagnostics ${CMAKE_DL_LIBS})
+  find_path(MATCHING_NVTX_INCLUDE_DIR nvtx3/nvToolsExt.h HINTS ${CUDAToolkit_INCLUDE_DIRS})
+  if(MATCHING_NVTX_INCLUDE_DIR)
+    target_include_directories(matching_replay_diagnostics PRIVATE "${MATCHING_NVTX_INCLUDE_DIR}")
+    target_compile_definitions(matching_replay_diagnostics PRIVATE MVH_MATCHING_NVTX=1)
+    add_executable(matching_replay_nvtx matching/replay.cpp)
+    target_include_directories(matching_replay_nvtx PRIVATE "${MATCHING_NVTX_INCLUDE_DIR}")
+    target_compile_definitions(matching_replay_nvtx PRIVATE MVH_MATCHING_NVTX=1)
+    target_link_libraries(matching_replay_nvtx PRIVATE mvh_matching mvh_gpu_rt ${CMAKE_DL_LIBS})
+    set_target_properties(matching_replay_nvtx PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  else()
+    message(WARNING "NVTX3 headers unavailable: matching counters enabled without NVTX ranges")
+  endif()
+  set_target_properties(matching_replay_diagnostics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  if(TARGET matching_replay_nvtx)
+    set(MATCHING_NVTX_TEST_ARGS --nvtx $<TARGET_FILE:matching_replay_nvtx>)
+  endif()
+  add_test(NAME matching_diagnostics_contract COMMAND ${Python3_EXECUTABLE} -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_matching_diagnostics.py"
+    --normal $<TARGET_FILE:matching_replay>
+    --diagnostics $<TARGET_FILE:matching_replay_diagnostics> --root "${SIPROS_ROOT}" ${MATCHING_NVTX_TEST_ARGS})
+
+  add_test(NAME matching_no_bin_replay_contract COMMAND ${Python3_EXECUTABLE} -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_matching_capture.py"
+    --binary $<TARGET_FILE:sipros_mvh_cuda> --root "${SIPROS_ROOT}"
+    --replay $<TARGET_FILE:matching_replay_no_bin>)
+
+  add_test(NAME matching_grouped_replay_contract COMMAND ${Python3_EXECUTABLE} -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_matching_capture.py"
+    --binary $<TARGET_FILE:sipros_mvh_cuda> --root "${SIPROS_ROOT}"
+    --replay $<TARGET_FILE:matching_replay>)
+endif()
+set_target_properties(matching_benchmark PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME matching_module_contract COMMAND matching_benchmark --contract)
+add_test(NAME matching_capture_contract COMMAND ${Python3_EXECUTABLE} -B
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_matching_capture.py"
+  --binary $<TARGET_FILE:sipros_mvh_cuda> --root "${SIPROS_ROOT}")

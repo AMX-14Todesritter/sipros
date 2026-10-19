@@ -9,6 +9,7 @@
 #include "scoring.cuh"
 #include "assignment.cuh"
 #include "theoretical.cuh"
+#include "../matching/capture.cuh"
 #include <cub/cub.cuh>
 #include <memory>
 #include <algorithm>
@@ -808,6 +809,21 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         }
     }
     if (!output.chargeStride) { active.reset(); ionOffsets.reset(); }
+
+    if (mvh_matching::captureBatch(batch.scans, scans.p, candidates.p, size,
+        peptides.p, batch.peptides.size(), texts.p, peaks.p, classes.p, peaks.n,
+        buckets.p, buckets.n, config, ionOffsets ? ionOffsets->p : nullptr,
+        active ? active->p : nullptr, cachedIons ? cachedIons->p : nullptr,
+        output.chargeStride)) {
+        std::ofstream mapping;
+        mapping.exceptions(std::ios::badbit | std::ios::failbit);
+        mapping.open(mvh_matching::captureDirectory / "scan_sources.tsv");
+        mapping << "scan_index\tsource_scan_id\tsource_file\n";
+        for (size_t i=0;i<batch.spectra->owners.size();++i) {
+            const auto* scan=batch.spectra->owners[i];
+            mapping << i << '\t' << scan->iScanId << '\t' << scan->sFT2Filename << '\n';
+        }
+    }
 
     // Diagnostics allocate their reference only after theory-cache decisions.
     // They never replace the RT results used by the actual top-candidate filter.

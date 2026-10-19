@@ -1,5 +1,6 @@
 #pragma once
 #include "types.cuh"
+#include "../matching/matching.cuh"
 namespace mvh_cuda {
 __device__ inline void exchange(Top &a,Top &b){Top t=a;a=b;b=t;}
 __device__ inline bool GreaterScore(const Top &a,const Top &b){return a.score>b.score;}
@@ -37,41 +38,11 @@ __device__ void saveScoreSort(Top *a,int n){
     // Guarded insertion has the same shifts as the final guarded/unguarded passes.
     for(int i=1;i<n;++i){Top value=a[i];int j=i;while(j>0&&GreaterScore(value,a[j-1])){a[j]=a[j-1];--j;}a[j]=value;}
 }
-// Select the nearest peak within strict tolerance, regardless of its class.
-// Equal distances retain the first encountered peak; class 0 remains unscored.
+// Compatibility adapter: the scorer still consumes intensity classes.
 __device__ int findNear(double mz, double tolerance, const Scan &scan,
                         const double *peaks, const int *classes, const short *hub) {
-    if (!scan.peaks) return 0;
-
-    const int lower = int(mz - tolerance);
-    const int upper = int(mz + tolerance);
-    if (upper < scan.lowest || lower > scan.highest) return 0;
-
-    const int firstBucket = lower >= scan.lowest ? lower - scan.lowest : 0;
-    const int lastBucket = upper <= scan.highest ? upper - scan.lowest
-                                                 : scan.highest - scan.lowest;
-    int bestClass = -1;
-    double bestDistance = tolerance;
-    for (int bucket = firstBucket; bucket <= lastBucket; ++bucket) {
-        const int first = hub[scan.hubOffset + 2 * bucket];
-        const int last = hub[scan.hubOffset + 2 * bucket + 1];
-        if (first == -1) continue;
-
-        for (int i = first; i < last; ++i) {
-            const auto peakIndex = scan.peakOffset + i;
-            const int candidateClass = classes[peakIndex];
-
-            const double distance = fabs(mz - peaks[peakIndex]);
-            // Bucket membership is only a coarse filter, not a tolerance test.
-            if (!(distance < tolerance)) continue;
-
-            if (distance < bestDistance) {
-                bestClass = candidateClass;
-                bestDistance = distance;
-            }
-        }
-    }
-    return bestClass >= 0 ? bestClass : 0;
+    const int peak = mvh_matching::nearestPeak(mz, tolerance, scan, peaks, hub);
+    return peak == mvh_matching::NoPeak ? 0 : classes[scan.peakOffset + peak];
 }
 
 struct IonCounter {

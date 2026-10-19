@@ -27,5 +27,7 @@ struct SceneResources {
                             const OptixAccelBuildOptions& options);
     void initializeSbt();
     void launch(Params params);
+    void stage(Params params);
+    void launchStaged(int count);
 };
 }

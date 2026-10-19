@@ -1,6 +1,7 @@
 #include "runner.h"
 #include "output_paths.h"
 #include "engine.h"
+#include "../matching/capture.h"
 #include "peptide_generation.h"
 #include <filesystem>
 #include <fstream>
@@ -15,12 +16,14 @@ int main(int argc, char **argv) {
         bool scoreImpact = false;
         for (int i=1; i<argc; ++i) {
             std::string key=argv[i];
+            if (key=="--capture-matching") { mvh_matching::setCaptureEnabled(true); continue; }
             if (key=="--score-impact") { scoreImpact = true; continue; }
             if(key=="--candidate-reuse-stats"){mvh_cuda::setCandidateReuseStats(true);continue;}
             if(key=="--verify-cuda"){mvh_cuda::setVerification(true);continue;}
             if (key=="--help" || key=="-h") {
                 std::cout << "Usage: sipros_mvh_cuda -f spectra.ft2|spectra.mzML -c search.cfg "
                              "-fasta proteins.fasta [-o NEW_DIRECTORY] [-t threads] [--peptide-batch-size N] [--peptide-generation cpu|cuda] [--result-restoration batch|final] [--spectrum-cache host|device] [--verify-cuda] [--candidate-reuse-stats] [--score-impact] [--match-backend cuda|rt-triangle|rt-audit|rt-instanced|rt-custom]\n";
+                std::cout << "--capture-matching saves matching inputs for the first nonempty scoring batch under the run output.\n";
                 std::cout << "Default output: output/search/mvh_cuda/<input>_<UTC timestamp>/\n"
                              "SIPROS_OUTPUT_ROOT overrides the output root.\n";
                 return 0;

@@ -17,6 +17,8 @@ struct SphereState {
     int classCount = 0;
     float rayOriginY = 0;
     float rayTmax = 0;
+    int stagedQueries = 0;
+    bool aggregate=false;
 };
 std::unique_ptr<SphereState> state;
 
@@ -32,13 +34,13 @@ void validateConfiguration(const mvh_cuda::Config& config) {
 void reset() { state.reset(); }
 
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
-             const int* classes, size_t peakCount, const mvh_cuda::Config& config) {
+             const int* classes, size_t peakCount, const mvh_cuda::Config& config,bool aggregate) {
     validateConfiguration(config);
     if (peakCount && (!peaks || !classes))
         throw std::runtime_error("Sphere RT requires peak masses and classes");
     if (state) {
         state->scene.requireSameLayout(scans);
-        if (state->fragmentTolerance != config.fragmentTolerance || state->classCount != config.classes)
+        if (state->fragmentTolerance != config.fragmentTolerance || state->classCount != config.classes || state->aggregate!=aggregate)
             throw std::runtime_error("Sphere RT configuration changed without reset");
         return;
     }
@@ -46,9 +48,9 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
     auto next = std::make_unique<SphereState>();
     next->scene.layout = scans;
     next->fragmentTolerance = config.fragmentTolerance;
-    next->classCount = config.classes;
+    next->classCount = config.classes;next->aggregate=aggregate;
     initializeOptix(next->scene.objects);
-    createPipeline(next->scene.objects, MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
+    createPipeline(next->scene.objects, aggregate?MVH_GPU_RT_AGGREGATE_PTX_PATH:MVH_GPU_RT_CUSTOM_PTX_PATH, false, PrimitiveKind::Sphere);
 
     const float radius = static_cast<float>(config.fragmentTolerance);
     const auto offsets = sphereCenterOffsets(peaks, peakCount, config.fragmentTolerance);
@@ -101,14 +103,27 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
 }
 
 void launch(Params params) {
+    stage(params);
+    state->scene.launchStaged(params.size);
+}
+
+void stage(Params params) {
     if (!state) throw std::runtime_error("Sphere RT resources not prepared");
     if (params.cfg.fragmentTolerance != state->fragmentTolerance || params.cfg.classes != state->classCount)
         throw std::runtime_error("Sphere RT launch configuration differs from prepared geometry");
+    if(bool(params.matchSummaries)!=state->aggregate)throw std::runtime_error("RT output mode differs from pipeline");
     params.sphereOffsets = state->offsets->data;
     params.spherePeakIndices = state->peakIndices->data;
     params.rayOriginY = state->rayOriginY;
     params.rayTmax = state->rayTmax;
     params.instanced = false;
-    state->scene.launch(params);
+    state->scene.stage(params);
+    state->stagedQueries = (params.matchQueries || params.matchGroups) ? params.size : 0;
+}
+
+void launchStagedMatching() {
+    if (!state || state->stagedQueries <= 0)
+        throw std::runtime_error("Matching queries not staged");
+    state->scene.launchStaged(state->stagedQueries);
 }
 }

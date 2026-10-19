@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "engine.h"
+#include "../matching/capture.h"
 #include "peptide_generation.h"
 #include "mvh_scan_vector.h"
 #include <iomanip>
@@ -47,6 +48,7 @@ void mvh_app::run(const std::string &input, const std::string &config,
     if (!std::filesystem::create_directory(output))
         throw std::runtime_error("Output directory must not already exist");
     mvh_cuda::startScoreImpact(output);
+    mvh_matching::startCapture(output);
     std::filesystem::copy_file(config, std::filesystem::path(output)/"input_config.cfg");
     MvhScanVector spectra(input, output, config, true);
     if (!spectra.loadMassData()) throw std::runtime_error("Cannot load spectra");

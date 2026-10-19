@@ -16,13 +16,14 @@ void reset() {
 void prepare(const std::vector<mvh_cuda::Scan>& scans,
              const mvh_cuda::Scan* deviceScans, const double* devicePeaks,
              const int* deviceClasses, size_t peakCount, GeometryKind geometry,
-             const mvh_cuda::Config& config) {
+             const mvh_cuda::Config& config,bool aggregate) {
+    if(aggregate && geometry!=GeometryKind::Spheres)throw std::invalid_argument("Aggregate replay requires spheres");
     if (activeGeometry && *activeGeometry != geometry)
         throw std::runtime_error("RT backend changed without reset");
 
     switch (geometry) {
     case GeometryKind::Spheres:
-        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config);
+        sphere_backend::prepare(scans, devicePeaks, deviceClasses, peakCount, config,aggregate);
         break;
     case GeometryKind::Triangles:
     case GeometryKind::InstancedTriangles:
@@ -44,4 +45,46 @@ void launch(Params params) {
     else
         triangle_backend::launch(params);
 }
+void launchMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
+                    int count, int* results, const mvh_cuda::Config& config) {
+    if (count < 0) throw std::invalid_argument("Negative matching query count");
+    if (!count) return;
+    stageMatching(scans, queries, count, results, config);
+    launchStagedMatching();
+}
+
+void stageMatching(const mvh_cuda::Scan* scans, const mvh_matching::Query* queries,
+                   int count, int* results, const mvh_cuda::Config& config) {
+    if (count <= 0 || !scans || !queries || !results)
+        throw std::invalid_argument("Invalid matching query buffers/count");
+    if (!activeGeometry || *activeGeometry != GeometryKind::Spheres)
+        throw std::runtime_error("Matching-only launch requires prepared sphere geometry");
+    Params params{};
+    params.scans = scans; params.matchQueries = queries;
+    params.matchResults = results; params.size = count; params.cfg = config;
+    sphere_backend::stage(params);
+}
+
+void launchStagedMatching() {
+    if (!activeGeometry || *activeGeometry != GeometryKind::Spheres)
+        throw std::runtime_error("Matching-only launch requires prepared sphere geometry");
+    sphere_backend::launchStagedMatching();
+}
+
+void stageGroupedMatching(const mvh_cuda::Scan* scans,
+    const mvh_cuda::Candidate* groups, const uint64_t* offsets, const double* mz,
+    uint64_t base, int count, int* results, const mvh_cuda::Config& config,
+    mvh_matching::Statistics* statistics,mvh_matching::CandidateSummary* summaries,const int* classes) {
+    if(count<=0 || !scans || !groups || !offsets || !mz || (!results && !summaries) || (summaries && !classes))
+        throw std::invalid_argument("Invalid grouped matching buffers/count");
+    if(!activeGeometry || *activeGeometry!=GeometryKind::Spheres)
+        throw std::runtime_error("Grouped matching requires prepared spheres");
+    Params params{};
+    params.scans=scans;params.matchGroups=groups;params.matchOffsets=offsets;
+    params.matchMz=mz;params.matchBase=base;params.size=count;
+    params.matchResults=results;params.cfg=config;
+    params.matchStatistics=statistics;params.matchSummaries=summaries;params.classes=classes;
+    sphere_backend::stage(params);
+}
+
 }

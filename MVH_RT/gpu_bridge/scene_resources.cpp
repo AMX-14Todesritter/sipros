@@ -69,9 +69,17 @@ void SceneResources::initializeSbt() {
 }
 
 void SceneResources::launch(Params params) {
+    stage(params);
+    launchStaged(params.size);
+}
+
+void SceneResources::stage(Params params) {
     params.handles = handles->data;
     checkCuda(cudaMemcpy(parameters.data, &params, sizeof(params), cudaMemcpyHostToDevice));
-    checkOptix(optixLaunch(objects.pipeline, nullptr, parameters.address(), sizeof(params),
-                          &sbt, params.size, 1, 1));
+}
+
+void SceneResources::launchStaged(int count) {
+    checkOptix(optixLaunch(objects.pipeline, nullptr, parameters.address(), sizeof(Params),
+                          &sbt, count, 1, 1));
 }
 }

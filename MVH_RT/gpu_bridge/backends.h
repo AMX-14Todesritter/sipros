@@ -5,8 +5,10 @@
 namespace mvh_rt_gpu::sphere_backend {
 void reset();
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
-             const int* classes, size_t peakCount, const mvh_cuda::Config& config);
+             const int* classes, size_t peakCount, const mvh_cuda::Config& config,bool aggregate=false);
 void launch(Params params);
+void stage(Params params);
+void launchStagedMatching();
 }
 
 namespace mvh_rt_gpu::triangle_backend {

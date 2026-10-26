@@ -327,3 +327,51 @@ Missing or nonpositive primary charge is an input error; no alternative charge
 or isolation-window precursor is inferred. This changes candidate lists and
 search results for files containing extra precursor hypotheses. MzML input
 retains its existing behavior.
+
+
+## Matching-only comparison on the 0.0 production matchers
+
+`matching_only_checked` and `matching_only_raw` are independent experiment
+executables, available with RT enabled and flow counters disabled. The checked
+RT variant applies a strict double tolerance check to a returned sphere hit;
+the raw variant retains the production RT hit policy. This postcheck alone does
+not prove correctness for float false negatives or nearest-peak ties: every
+query is validated, and `results_equivalent` records the observed outcome.
+
+The CUDA kernel calls the production `findNear()` directly. The RT kernel uses
+the production split-m/z spheres, `tracePeak()` and peak-to-class mapping. One
+candidate is handled per CUDA/raygen thread; queries remain in captured order.
+Both write one 32-bit class per query; 0 means miss or class-zero hit, as in
+production scoring. No ion generation, MVH, top retention or class histogram is
+executed in the timed kernels. Test-only Params fields and shader branches are
+compiled under `MVH_MATCHING_ONLY`; the production ABI and execution path are
+unchanged without that define.
+
+Use a capture-v1 directory containing preprocessed peaks/classes/hub, compact
+scan records, candidates, query offsets/mz and validity. The previously saved
+Marine/E.coli first 10M-peptide batch can be reused without another full search:
+
+```sh
+build/bin/matching_only_checked \
+  --capture output/benchmarks/matching_fusion_marine_ecoli_x1_20261019/capture_search/matching_capture \
+  --output output/benchmarks/matching_only_repeat \
+  --chunk-groups 1000000 --repeats 7 --warmup 2 --threads 8
+```
+
+Run inside the configured container with the CUDA and OptiX runtime libraries
+visible. Output directories must be new. `--chunk-groups 0` requests the entire
+capture in one launch per backend, if VRAM permits. `--max-chunks N` selects a
+prefix for quick tests. `--threads` controls only the untimed CPU reference.
+The CPU oracle independently binary-searches sorted experimental peaks,
+including first-on-tie handling; all CUDA results must match it. RT differences
+are retained in `mismatch_examples.tsv`, never filtered or hidden.
+
+CUDA events time only matching launches after all input and RT launch parameters
+are resident. Build, allocation, upload, downloads and validation are recorded
+separately. Repeats alternate CUDA/RT order; per-chunk times are summed per
+repeat, then the median of these totals is reported. A single output allocation
+is shared sequentially by both backends to support a larger resident workload;
+extra untimed launches download and check each backend independently.
+`complete=true` means the experiment finished; only `results_equivalent=true`
+permits an equivalent-result speed comparison. These matching-only times must
+not be equated with the production fused-scoring kernel or full search times.

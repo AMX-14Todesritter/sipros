@@ -32,6 +32,7 @@ __device__ unsigned tracePeak(OptixTraversableHandle handle, double mz) {
     return peakIndex;
 }
 
+#ifndef MVH_MATCHING_ONLY
 struct SphereCounter : mvh_cuda::IonCounter {
     __device__ SphereCounter(const mvh_cuda::Scan &scan, const mvh_cuda::Config &cfg,
                              const double *peaks, const int *classes, const short *hub)
@@ -66,6 +67,7 @@ struct SphereCounter : mvh_cuda::IonCounter {
         else ++key[cfg.classes];
     }
 };
+#endif
 }
 
 // Design point 4: hit payload. Intersection itself is the built-in OptiX
@@ -84,8 +86,25 @@ extern "C" __global__ void __miss__background() {
 // One launch index scores one candidate. Its theoretical ions each call add().
 extern "C" __global__ void __raygen__camera() {
     const int index = optixGetLaunchIndex().x;
+#ifdef MVH_MATCHING_ONLY
+    const auto& scan=params.scans[params.candidates[index].scanId];
+    const auto handle=params.handles[params.candidates[index].scanId];
+    for(uint64_t j=params.matchOffsets[index]-params.matchBase;j<params.matchOffsets[index+1]-params.matchBase;++j){
+        const double mz=params.matchMz[j];
+        const unsigned peak=tracePeak(handle,mz);
+        int cls=0;
+        if(peak!=NoPeak){
+#ifdef MVH_MATCHING_POSTCHECK
+            if(fabs(mz-params.peaks[scan.peakOffset+peak])<params.cfg.fragmentTolerance)
+#endif
+                cls=params.classes[scan.peakOffset+peak];
+        }
+        params.matchClasses[j]=cls;
+    }
+#else
     params.results[index] = mvh_cuda::scoreCandidate<SphereCounter>(index, params.scans,
         params.candidates, params.size, params.peptides, params.texts, params.peaks,
         params.classes, params.hub, params.lnTable, params.results, params.cfg,
         params.ionOffsets, params.ionValid, params.cachedIons, params.chargeStride);
+#endif
 }

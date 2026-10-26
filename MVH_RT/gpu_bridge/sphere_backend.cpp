@@ -18,6 +18,9 @@ struct SphereState {
     int classCount = 0;
     float rayOriginY = 0;
     float rayTmax = 0;
+#ifdef MVH_MATCHING_ONLY
+    int matchingCount=0;
+#endif
 };
 std::unique_ptr<SphereState> state;
 
@@ -127,4 +130,19 @@ void launch(Params params) {
     params.instanced = false;
     state->scene.launch(params);
 }
+#ifdef MVH_MATCHING_ONLY
+void stageMatching(Params params) {
+    if(!state || params.cfg.fragmentTolerance!=state->fragmentTolerance || params.cfg.classes!=state->classCount)
+        throw std::runtime_error("Matching geometry/configuration mismatch");
+    params.sphereOffsets=state->offsets->data;
+    params.spherePeakIndices=state->peakIndices->data;
+    params.rayOriginY=state->rayOriginY;params.rayTmax=state->rayTmax;params.instanced=false;
+    state->scene.stageMatching(params);state->matchingCount=params.size;
+}
+void launchStagedMatching() {
+    if(!state || state->matchingCount<=0)throw std::runtime_error("Matching inputs not staged");
+    state->scene.launchStagedMatching(state->matchingCount);
+}
+#endif
+
 }

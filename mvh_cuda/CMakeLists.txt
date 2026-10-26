@@ -118,6 +118,44 @@ if(MVH_CUDA_ENABLE_RT)
   target_compile_definitions(mvh_gpu_rt PRIVATE MVH_GPU_RT_PTX_PATH="${GPU_RT_PTX}"
     MVH_GPU_RT_CUSTOM_PTX_PATH="${GPU_RT_CUSTOM_PTX}")
   add_dependencies(mvh_gpu_rt mvh_gpu_rt_ptx mvh_gpu_rt_custom_ptx)
+  # Matching-only libraries have their own Params ABI and PTX. Production stays unchanged.
+  if(NOT MVH_ENABLE_FLOW_COUNTERS)
+    get_target_property(MATCH_ONLY_RT_SOURCES mvh_gpu_rt SOURCES)
+    foreach(variant IN ITEMS checked raw)
+      set(MATCH_ONLY_PTX_${variant} "${CMAKE_CURRENT_BINARY_DIR}/matching_only_${variant}.ptx")
+      set(MATCH_ONLY_DEFINES -DMVH_MATCHING_ONLY=1)
+      if(variant STREQUAL "checked")
+        list(APPEND MATCH_ONLY_DEFINES -DMVH_MATCHING_POSTCHECK=1)
+      endif()
+      add_custom_command(OUTPUT "${MATCH_ONLY_PTX_${variant}}"
+        COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --ptx --std=c++17 --gpu-architecture=compute_75
+          --generate-line-info --fmad=false ${MATCH_ONLY_DEFINES}
+          "-I${OPTIX_INCLUDE_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/cuda" "-I${GPU_RT_DIR}"
+          "${GPU_RT_DIR}/custom_device.cu" -o "${MATCH_ONLY_PTX_${variant}}"
+        DEPENDS "${GPU_RT_DIR}/custom_device.cu" "${GPU_RT_DIR}/bridge.h"
+          cuda/types.cuh cuda/scoring.cuh include/flow_profile.h VERBATIM)
+      add_custom_target(matching_only_${variant}_ptx DEPENDS "${MATCH_ONLY_PTX_${variant}}")
+      add_library(matching_only_rt_${variant} STATIC ${MATCH_ONLY_RT_SOURCES})
+      target_include_directories(matching_only_rt_${variant} PUBLIC "${GPU_RT_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/cuda")
+      target_link_libraries(matching_only_rt_${variant} PUBLIC mvh_rt_support mvh_profiling)
+      target_compile_definitions(matching_only_rt_${variant} PUBLIC MVH_MATCHING_ONLY=1)
+      if(variant STREQUAL "checked")
+        target_compile_definitions(matching_only_rt_${variant} PUBLIC MVH_MATCHING_POSTCHECK=1)
+      endif()
+      target_compile_definitions(matching_only_rt_${variant} PRIVATE
+        MVH_GPU_RT_PTX_PATH="${GPU_RT_PTX}"
+        MVH_GPU_RT_CUSTOM_PTX_PATH="${MATCH_ONLY_PTX_${variant}}")
+      add_dependencies(matching_only_rt_${variant} mvh_gpu_rt_ptx matching_only_${variant}_ptx)
+      add_executable(matching_only_${variant} matching_only/compare.cu)
+      target_link_libraries(matching_only_${variant} PRIVATE matching_only_rt_${variant} OpenMP::OpenMP_CXX)
+      target_compile_options(matching_only_${variant} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false;-lineinfo;-Xcompiler=-fopenmp;-Xcompiler=-ffp-contract=off>)
+      set_target_properties(matching_only_${variant} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endforeach()
+    add_test(NAME matching_only_contract COMMAND ${Python3_EXECUTABLE} -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_matching_only.py"
+      --strict $<TARGET_FILE:matching_only_checked> --raw $<TARGET_FILE:matching_only_raw>
+      --root "${SIPROS_ROOT}")
+  endif()
   target_link_libraries(mvh_original PUBLIC mvh_gpu_rt)
   target_compile_definitions(mvh_original PRIVATE MVH_CUDA_ENABLE_RT=1)
   add_executable(mvh_gpu_rt_contract "${GPU_RT_DIR}/contract.cpp")

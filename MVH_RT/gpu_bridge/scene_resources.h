@@ -34,5 +34,9 @@ struct SceneResources {
                             const OptixAccelBuildOptions& options);
     void initializeSbt();
     void launch(Params params);
+#ifdef MVH_MATCHING_ONLY
+    void stageMatching(Params params);
+    void launchStagedMatching(int count);
+#endif
 };
 }

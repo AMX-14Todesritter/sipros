@@ -7,6 +7,10 @@ void reset();
 void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
              const int* classes, size_t peakCount, const mvh_cuda::Config& config);
 void launch(Params params);
+#ifdef MVH_MATCHING_ONLY
+void stageMatching(Params params);
+void launchStagedMatching();
+#endif
 }
 
 namespace mvh_rt_gpu::triangle_backend {

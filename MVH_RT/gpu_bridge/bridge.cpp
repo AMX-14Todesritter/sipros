@@ -48,4 +48,19 @@ void launch(Params params) {
     else
         triangle_backend::launch(params);
 }
+#ifdef MVH_MATCHING_ONLY
+void stageMatching(Params params) {
+    if(!activeGeometry || *activeGeometry!=GeometryKind::Spheres)
+        throw std::runtime_error("Matching-only requires prepared spheres");
+    if(params.size<=0 || !params.candidates || !params.matchOffsets || !params.matchMz || !params.matchClasses || !params.scans || !params.classes || !params.peaks)
+        throw std::invalid_argument("Invalid matching-only buffers/count");
+    sphere_backend::stageMatching(params);
+}
+void launchStagedMatching() {
+    if(!activeGeometry || *activeGeometry!=GeometryKind::Spheres)
+        throw std::runtime_error("Matching-only requires prepared spheres");
+    sphere_backend::launchStagedMatching();
+}
+#endif
+
 }

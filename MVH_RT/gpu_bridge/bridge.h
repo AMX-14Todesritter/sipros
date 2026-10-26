@@ -25,6 +25,13 @@ struct Params {
     const unsigned *spherePeakIndices;
     float rayOriginY;
     float rayTmax;
+#ifdef MVH_MATCHING_ONLY
+    // Test-only ABI: production Params remains unchanged without this define.
+    const uint64_t* matchOffsets;
+    const double* matchMz;
+    uint64_t matchBase;
+    int* matchClasses;
+#endif
 };
 // Resources persist across peptide batches and reset for each input dataset.
 void reset();
@@ -37,4 +44,8 @@ void prepare(
     GeometryKind geometry,
     const mvh_cuda::Config& config);
 void launch(Params params);
+#ifdef MVH_MATCHING_ONLY
+void stageMatching(Params params);
+void launchStagedMatching();
+#endif
 }

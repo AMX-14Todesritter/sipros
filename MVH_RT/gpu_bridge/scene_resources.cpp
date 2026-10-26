@@ -90,4 +90,14 @@ void SceneResources::launch(Params params) {
     checkOptix(optixLaunch(objects.pipeline, nullptr, parameters.address(), sizeof(params),
                           &sbt, params.size, 1, 1));
 }
+#ifdef MVH_MATCHING_ONLY
+void SceneResources::stageMatching(Params params) {
+    params.handles=handles->data;
+    checkCuda(cudaMemcpy(parameters.data,&params,sizeof(params),cudaMemcpyHostToDevice));
+}
+void SceneResources::launchStagedMatching(int count) {
+    checkOptix(optixLaunch(objects.pipeline,nullptr,parameters.address(),sizeof(Params),&sbt,count,1,1));
+}
+#endif
+
 }

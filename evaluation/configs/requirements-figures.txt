@@ -1,0 +1,3 @@
+# Optional isolated plotting dependencies; install under output/evaluation/dependencies.
+matplotlib==3.9.4
+numpy==2.2.6

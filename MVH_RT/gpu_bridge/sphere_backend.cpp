@@ -118,7 +118,7 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const double* peaks,
               << " instance_bytes=" << sizeof(OptixInstance) << '\n';
 }
 
-void launch(Params params) {
+void launch(Params params, cudaEvent_t fusedStart, cudaEvent_t fusedEnd) {
     MVH_PROFILE_SCOPE("mvh/rt/sphere/launch");
     if (!state) throw std::runtime_error("Sphere RT resources not prepared");
     if (params.cfg.fragmentTolerance != state->fragmentTolerance || params.cfg.classes != state->classCount)
@@ -128,7 +128,7 @@ void launch(Params params) {
     params.rayOriginY = state->rayOriginY;
     params.rayTmax = state->rayTmax;
     params.instanced = false;
-    state->scene.launch(params);
+    state->scene.launch(params, fusedStart, fusedEnd);
 }
 #ifdef MVH_MATCHING_ONLY
 void stageMatching(Params params) {

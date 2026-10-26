@@ -756,6 +756,9 @@ struct ScoringOutput {
     std::vector<Top>& finalTop;
     std::vector<ScanCounts>& counts;
     double allocationAndUploadSeconds=0, theorySeconds=0, kernelSeconds=0;
+#ifdef MVH_ENABLE_EVALUATION_TIMING
+    double fusedDeviceSeconds=0;
+#endif
     double retentionSeconds=0, compactionSeconds=0, downloadSeconds=0;
     uint64_t cachedIonCount=0;
     int chargeStride=0;
@@ -887,6 +890,9 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
 
     MVH_PROFILE_BEGIN(scoringRange, "mvh/gpu/match_and_score");
     CudaEvent kernelStart, kernelEnd;
+#ifdef MVH_ENABLE_EVALUATION_TIMING
+    CudaEvent rtFusedStart, rtFusedEnd;
+#endif
     check(cudaEventRecord(kernelStart.event));
     if (size && (matchBackend=="cuda" || matchBackend=="rt-audit" || scoreImpactEnabled)) ScoreSequenceVsSpectrum<<<(size + 127) / 128, 128>>>(scans.p,
         candidates.p, size, peptides.p, texts.p, peaks.p, classes.p, buckets.p,
@@ -910,7 +916,11 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
         p.ionValid=active ? active->p : nullptr;
         p.cachedIons=cachedIons ? cachedIons->p : nullptr;
         p.chargeStride=output.chargeStride;
+#ifdef MVH_ENABLE_EVALUATION_TIMING
+        mvh_rt_gpu::launch(p, rtFusedStart.event, rtFusedEnd.event);
+#else
         mvh_rt_gpu::launch(p);
+#endif
         if (auditResults) {
             MVH_PROFILE_SCOPE("mvh/diagnostic/rt_audit");
             Buffer<unsigned long long> differences(4);
@@ -931,6 +941,15 @@ ScoringOutput executeScoringBatch(const PackedScoringBatch &batch, const Config 
     float milliseconds=0;
     check(cudaEventElapsedTime(&milliseconds, kernelStart.event, kernelEnd.event));
     output.kernelSeconds = milliseconds / 1000.0;
+#ifdef MVH_ENABLE_EVALUATION_TIMING
+    // The outer end-event wait also completes these inner events.
+    output.fusedDeviceSeconds = output.kernelSeconds;
+    if (size && matchBackend != "cuda") {
+        float rtMilliseconds = 0;
+        check(cudaEventElapsedTime(&rtMilliseconds, rtFusedStart.event, rtFusedEnd.event));
+        output.fusedDeviceSeconds = rtMilliseconds / 1000.0;
+    }
+#endif
 #ifdef MVH_ENABLE_FLOW_COUNTERS
     mvh_flow::time("gpu/scoring_fused",output.kernelSeconds);
 #endif
@@ -1248,6 +1267,9 @@ void scorePeptidesMVH(std::vector<MS2Scan *> &scans, const PeptideBatch& inputs,
               << " allocation_upload_seconds=" << output.allocationAndUploadSeconds
               << " theory_seconds=" << output.theorySeconds
               << " kernel_seconds=" << output.kernelSeconds
+#ifdef MVH_ENABLE_EVALUATION_TIMING
+              << " fused_device_seconds=" << output.fusedDeviceSeconds
+#endif
               << " retention_seconds=" << output.retentionSeconds
               << " compaction_seconds=" << output.compactionSeconds
               << " download_seconds=" << output.downloadSeconds

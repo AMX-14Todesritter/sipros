@@ -33,7 +33,7 @@ struct SceneResources {
     AccelerationStats build(const std::vector<OptixBuildInput>& inputs,
                             const OptixAccelBuildOptions& options);
     void initializeSbt();
-    void launch(Params params);
+    void launch(Params params, cudaEvent_t fusedStart = nullptr, cudaEvent_t fusedEnd = nullptr);
 #ifdef MVH_MATCHING_ONLY
     void stageMatching(Params params);
     void launchStagedMatching(int count);

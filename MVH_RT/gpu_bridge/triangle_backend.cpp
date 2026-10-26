@@ -130,10 +130,10 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans, const mvh_cuda::Scan* dev
               << " instance_bytes=" << sizeof(OptixInstance) << '\n';
 }
 
-void launch(Params params) {
+void launch(Params params, cudaEvent_t fusedStart, cudaEvent_t fusedEnd) {
     MVH_PROFILE_SCOPE("mvh/rt/triangle/launch");
     if (!state) throw std::runtime_error("Triangle RT resources not prepared");
     params.instanced = state->instanced;
-    state->scene.launch(params);
+    state->scene.launch(params, fusedStart, fusedEnd);
 }
 }

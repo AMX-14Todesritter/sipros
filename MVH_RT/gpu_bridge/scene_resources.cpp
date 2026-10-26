@@ -80,15 +80,18 @@ void SceneResources::initializeSbt() {
     sbt.hitgroupRecordCount = 1;
 }
 
-void SceneResources::launch(Params params) {
+void SceneResources::launch(Params params, cudaEvent_t fusedStart, cudaEvent_t fusedEnd) {
     MVH_PROFILE_SCOPE("mvh/rt/SceneResources::launch");
     params.handles = handles->data;
     MVH_PROFILE_BEGIN(paramsRange, "mvh/rt/launch/upload_params");
     checkCuda(cudaMemcpy(parameters.data, &params, sizeof(params), cudaMemcpyHostToDevice));
     MVH_PROFILE_END(paramsRange);
     MVH_PROFILE_SCOPE("mvh/rt/launch/optixLaunch_submit");
+    // Optional evaluation events exclude the synchronous Params upload above.
+    if (fusedStart) checkCuda(cudaEventRecord(fusedStart));
     checkOptix(optixLaunch(objects.pipeline, nullptr, parameters.address(), sizeof(params),
                           &sbt, params.size, 1, 1));
+    if (fusedEnd) checkCuda(cudaEventRecord(fusedEnd));
 }
 #ifdef MVH_MATCHING_ONLY
 void SceneResources::stageMatching(Params params) {

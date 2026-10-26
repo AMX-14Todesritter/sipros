@@ -1,0 +1,79 @@
+{
+  "config": "experiments/Regular.cfg",
+  "backends": [
+    "cuda",
+    "rt-instanced",
+    "rt-custom"
+  ],
+  "batch_unit": "generated_peptide_entries",
+  "batch_sizes": [
+    2000000,
+    4000000,
+    8000000,
+    10000000,
+    12000000
+  ],
+  "repeats": 5,
+  "warmups": 1,
+  "cpu_threads": 4,
+  "workloads": {
+    "ecoli_x1": {
+      "fasta": "raw/Ecoli.fasta",
+      "ft2": "test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+      "expected_scans": 46066,
+      "cpu": true
+    },
+    "ecoli_x2": {
+      "fasta": "raw/Ecoli.fasta",
+      "ft2": "output/evaluation/inputs/ecoli_x2/Pan_062822_X2iso5.FT2",
+      "raw": "raw/Pan_062822_X2iso5.raw",
+      "expected_scans": 46862,
+      "cpu": true
+    },
+    "ecoli_x3": {
+      "fasta": "raw/Ecoli.fasta",
+      "ft2": "output/evaluation/inputs/ecoli_x3/Pan_062822_X3iso5.FT2",
+      "raw": "raw/Pan_062822_X3iso5.raw",
+      "expected_scans": 47369,
+      "cpu": true
+    },
+    "human": {
+      "fasta": "raw/2026-10-14-decoys-reviewed-UP000005640.fas",
+      "ft2": "test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+      "expected_scans": 46066,
+      "cpu": true,
+      "superseded_native_ft2": "output/evaluation/inputs/human/b1906_293T_proteinID_01A_QE3_122212.FT2",
+      "scan_source": "Pan_062822_X1iso5",
+      "superseded_native_raw": "raw/PXD001468/b1906_293T_proteinID_01A_QE3_122212.raw"
+    },
+    "marine": {
+      "fasta": "raw/Marine_fw_3rev.fasta",
+      "ft2": "test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+      "expected_scans": 46066,
+      "cpu": true,
+      "superseded_native_ft2": "raw/marine/ft/OSU_D10_FASP_Elite_03202014_01.FT2",
+      "scan_source": "Pan_062822_X1iso5"
+    },
+    "soil": {
+      "fasta": "raw/Soil_fw_3rev.fasta",
+      "ft2": "test_output/Pan_062822_X1iso5/ft/Pan_062822_X1iso5.FT2",
+      "expected_scans": 46066,
+      "cpu": false,
+      "superseded_native_ft2": "raw/soil/ft/Angelo_08202013_P1_3040cm_MB_FASP_Elite_Run1_01.FT2",
+      "scan_source": "Pan_062822_X1iso5"
+    }
+  },
+  "scan_policy_version": "x1_fixed_v2",
+  "fixed_scan_dataset": "ecoli_x1",
+  "scan_scaling_sources": [
+    "ecoli_x1",
+    "ecoli_x2",
+    "ecoli_x3"
+  ],
+  "real_world_workloads": [
+    "ecoli_x1",
+    "human",
+    "marine",
+    "soil"
+  ]
+}

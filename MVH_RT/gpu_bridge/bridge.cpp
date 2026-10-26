@@ -39,14 +39,14 @@ void prepare(const std::vector<mvh_cuda::Scan>& scans,
     activeGeometry = geometry;
 }
 
-void launch(Params params) {
+void launch(Params params, cudaEvent_t fusedStart, cudaEvent_t fusedEnd) {
     MVH_PROFILE_SCOPE("mvh/rt/bridge/launch");
     if (!params.size) return;
     if (!activeGeometry) throw std::runtime_error("RT resources not prepared");
     if (*activeGeometry == GeometryKind::Spheres)
-        sphere_backend::launch(params);
+        sphere_backend::launch(params, fusedStart, fusedEnd);
     else
-        triangle_backend::launch(params);
+        triangle_backend::launch(params, fusedStart, fusedEnd);
 }
 #ifdef MVH_MATCHING_ONLY
 void stageMatching(Params params) {

@@ -43,7 +43,7 @@ void prepare(
     size_t peakCount,
     GeometryKind geometry,
     const mvh_cuda::Config& config);
-void launch(Params params);
+void launch(Params params, cudaEvent_t fusedStart = nullptr, cudaEvent_t fusedEnd = nullptr);
 #ifdef MVH_MATCHING_ONLY
 void stageMatching(Params params);
 void launchStagedMatching();

@@ -101,10 +101,18 @@ def main():
     p.add_argument('--config',type=Path,default=ROOT/'experiments/Regular.cfg')
     p.add_argument('--backends',nargs='+',choices=BACKENDS,default=BACKENDS[1:])
     p.add_argument('--batch',type=int,default=2000000);p.add_argument('--repeats',type=int,default=5);p.add_argument('--warmups',type=int,default=1)
-    p.add_argument('--peak-audit',action='store_true');p.add_argument('--max-host-rss-gib',type=float,default=0);p.add_argument('--continue-on-backend-failure',action='store_true');p.add_argument('--threads',type=int,default=4);p.add_argument('--verify',action='store_true');p.add_argument('--score-impact',action='store_true')
+    p.add_argument('--min-device-free-gib',type=float,default=0);p.add_argument('--peak-audit',action='store_true');p.add_argument('--max-host-rss-gib',type=float,default=0);p.add_argument('--continue-on-backend-failure',action='store_true');p.add_argument('--threads',type=int,default=4);p.add_argument('--verify',action='store_true');p.add_argument('--score-impact',action='store_true')
     p.add_argument('--gpu-binary',type=Path,default=OUT/'build/gpu/bin/sipros_mvh_cuda');p.add_argument('--cpu-binary',type=Path,default=OUT/'build/cpu/bin/sipros_mvh')
     a=p.parse_args()
-    if (OUT/'manifests/LARGE_BENCHMARKS_PAUSED.json').exists() and a.category in ('real_world','batch_size','database_scaling','scan_scaling','end_to_end'):p.error('Large-scale performance benchmarks paused by user')
+    pause_path=OUT/'manifests/LARGE_BENCHMARKS_PAUSED.json'
+    if pause_path.exists() and a.category in ('real_world','batch_size','database_scaling','scan_scaling','end_to_end'):
+        # Explicitly authorized runs do not resume unrelated paused suites.
+        authorization=json.loads(pause_path.read_text()).get('authorized_runs',{}).get(a.id)
+        requested={'category':a.category,'scans':str(a.scans.resolve()),'fasta':str(a.fasta.resolve()),
+                   'config':str(a.config.resolve()),'gpu_binary':str(a.gpu_binary.resolve()),
+                   'backends':a.backends,'batch':a.batch,'repeats':a.repeats,'warmups':a.warmups,'threads':a.threads}
+        if not authorization or authorization.get('parameters')!=requested:
+            p.error('Large-scale performance benchmarks paused; this exact run has no explicit authorization')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+',a.id):p.error('invalid run id')
     if a.batch<1 or a.repeats<1 or a.warmups<0 or len(set(a.backends))!=len(a.backends):p.error('invalid batching/repetitions/backends')
     if 'cpu' in a.backends and (a.category in ('database_scaling','scan_scaling') or 'soil' in a.fasta.name.lower()):p.error('CPU excluded from Soil and scaling experiments')
@@ -162,10 +170,18 @@ def main():
                     manifest['runs'].append(item);save(mp,manifest);print('START '+name,flush=True)
                     before=gpu.read();peak=before;rss=0;hwm=0;start=time.perf_counter()
                     if a.peak_audit:env['SIPROS_PEAK_AUDIT_DIR']=str(directory/'peak_audit')
-                    with (dest/(name+'.log')).open('w') as log:
+                    memory_path=dest/(name+'.memory.jsonl')
+                    with memory_path.open('a',buffering=1) as memory_log, (dest/(name+'.log')).open('w') as log:
                         active=subprocess.Popen(cmd,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT)
                         while active.poll() is None:
-                            peak=max(peak,gpu.read())
+                            device_used=gpu.read();peak=max(peak,device_used)
+                            memory_log.write(json.dumps({'elapsed_seconds':time.perf_counter()-start,'device_used_bytes':device_used,'device_peak_bytes':peak})+'\n')
+                            if a.min_device_free_gib:
+                                memory=GpuMemory.Memory()
+                                if gpu.lib.nvmlDeviceGetMemoryInfo(gpu.handle,ctypes.byref(memory)):raise RuntimeError('NVML guard query failed')
+                                if memory.free<a.min_device_free_gib*2**30:
+                                    item['resource_guard']='device free memory below configured '+str(a.min_device_free_gib)+' GiB'
+                                    active.terminate()
                             try:
                                 status=Path(f'/proc/{active.pid}/status').read_text()
                                 for k,v in re.findall(r'^(VmRSS|VmHWM):\s+(\d+)',status,re.M):

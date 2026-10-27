@@ -31,7 +31,7 @@ bool scoreImpactEnabled = false;
 std::unique_ptr<ScoreImpactWriter> scoreImpactWriter;
 std::string matchBackend="cuda";
 int batchSize=2000000;
-bool useIonCache=true;
+constexpr bool useIonCache=false; // Baseline: generate theoretical ions directly in fused scoring.
 bool keepSpectraOnDevice=false;
 struct PreparedPeptides {
     std::unique_ptr<Buffer<char>> texts;
@@ -1527,7 +1527,7 @@ void runContractTests(){
     ProNovoConfig::minObservedMz=0;ProNovoConfig::maxObservedMz=10000;
     const std::vector<std::string> seqs{"[LDNM~ATK]","[LDN!M~ATK]","[FDITEEGLRYLRQWVNESGIR]","[~LDNMATK]","[LDNMATK]~","[AAAAAAAK]","["+std::string(127,'A')+"K]"};
     for(bool smart:{false,true}){
-        useIonCache=smart; // Exercise both the cached and direct device scoring paths.
+        // Exercise both ion models under the cache-off baseline.
         MVH::bUseSmartPlusThreeModel=smart;
         std::vector<Peptide *> peptides;std::vector<MS2Scan *> scans;
         for(int z=1;z<=9;++z)for(const auto &str:seqs){
@@ -1551,7 +1551,6 @@ void runContractTests(){
 
         for(auto *s:scans)delete s;for(auto*p:peptides)delete p;MVH::destroyLnTable();
     }
-    useIonCache=true;
     std::cout<<"PASS: CUDA strict/tie matching, charges 1..9, mass assignment boundaries/order, both ion models, PTM termini, long sequences, duplicates\n";
 }
 }

@@ -9,7 +9,7 @@ def prepare():
  D.mkdir(exist_ok=False);S=D/'source';S.mkdir();B=D/'build'
  for name in ('mvh_cuda','MVH_RT'):shutil.copytree(R/name,S/name,ignore=shutil.ignore_patterns('__pycache__'))
  for name in ('MSToolkit','shared'):(S/name).symlink_to(R/name,target_is_directory=True)
- p=S/'mvh_cuda/cuda/engine.cu';s=p.read_text();assert s.count('bool useIonCache=true;')==1;p.write_text(s.replace('bool useIonCache=true;','bool useIonCache=false; // Explicitly disabled for authorized batch sensitivity study.'))
+ s=(S/'mvh_cuda/cuda/engine.cu').read_text();assert s.count('constexpr bool useIonCache=false;')==1, 'Cache-off baseline required; rebuild from current source'
  # Restore only the historical multi-hypothesis FT2 reader, not historical scoring.
  sys.path.insert(0,str(R/'mvh/tests'));from source_methods import methods
  reader_path=S/'mvh_cuda/src/spectrum_input.cpp';current=reader_path.read_text()

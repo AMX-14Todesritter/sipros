@@ -201,7 +201,12 @@ def main():
                             print('FAILED '+name+'; continuing independent backends',flush=True);continue
                         raise RuntimeError(name+' failed; see preserved log')
                     with (directory/'run_summary.tsv').open() as f:item['summary']=dict(list(csv.reader(f,delimiter='\t'))[1:])
-                    item.update(log_metrics((dest/(name+'.log')).read_text()));item['psm_sha256']=sha(directory/'mvh_psms.tsv');item['status']='completed'
+                    item.update(log_metrics((dest/(name+'.log')).read_text()))
+                    if backend!='cpu' and (not item['batches'] or any(int(b.get('cached_ions',-1))!=0 or int(b.get('cache_charge_stride',-1))!=0 for b in item['batches'])):
+                        item.update(status='failed',error='Cache-off baseline violated or cache counters missing; rebuild the selected binary')
+                        save(mp,manifest)
+                        raise RuntimeError(item['error'])
+                    item['psm_sha256']=sha(directory/'mvh_psms.tsv');item['status']='completed'
                     # Identical immutable exports share disk blocks via hard links; every run retains its own path.
                     prior=next((r for r in manifest['runs'][:-1] if r.get('status')=='completed' and r.get('psm_sha256')==item['psm_sha256']),None)
                     if prior:

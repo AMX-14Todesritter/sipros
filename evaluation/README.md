@@ -14,6 +14,18 @@ Start with `python3 -B evaluation/scripts/inventory.py`. See `experiment_plan.md
 Existing production algorithms are not changed by this suite. Diagnostic runs
 and profiler replay are excluded from baseline performance statistics.
 
+## Mandatory cache-off baseline
+
+All subsequent experiments and profiling use theoretical-ion caching disabled.
+The production source fixes `useIonCache` to `false`, including semantic contracts.
+Rebuild on each target machine; previously built binaries are not updated by a
+source change. The runner rejects GPU measurements unless every scoring batch
+reports `cached_ions=0` and `cache_charge_stride=0`. Batch drivers validate the
+source baseline instead of patching a cache-enabled source copy. Historical
+cache-on diagnostic builders are archival workflows and are incompatible with
+this baseline; do not use them for new measurements. CUDA/OptiX compilation
+caches and spectrum reuse are separate and remain unaffected.
+
 ## Commands
 
 ```sh

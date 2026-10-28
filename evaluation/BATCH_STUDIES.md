@@ -3,6 +3,8 @@
 Run `evaluation/scripts/batch_study.py` inside the project container. It delegates
 measurements to `run.py`; it never builds or changes matching/scoring algorithms.
 The chosen binary determines single- versus multi-precursor input semantics.
+`--precursor-mode multi` requires matching build metadata and binary hash from
+`prepare_batch_binary.py`; the flag itself does not change reader behavior.
 Theoretical-ion caching must be disabled. Cache counters, workload totals, and
 same-backend PSM hashes are checked; scientific validation failures always stop.
 
@@ -128,3 +130,45 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
 
 These tests use a synthetic child process to exercise orchestration, not matching
 algorithms or GPU performance.
+
+## Both precursor modes, 2M through 24M
+
+Build isolated binaries once. The multi build restores only the three historical
+FT2 reader method bodies from commit `82522a4`; it preserves current signatures,
+matching/scoring kernels, geometry, and the compile-time cache-off baseline.
+The full Git history must be available. Build metadata records source and binary
+hashes and the selected mode. Existing build directories are not overwritten.
+
+```bash
+docker compose run --rm -e NVIDIA_DRIVER_CAPABILITIES=all sipros bash -lc '
+  set -e
+  python3 -B evaluation/scripts/prepare_batch_binary.py --precursor-mode primary
+  python3 -B evaluation/scripts/prepare_batch_binary.py --precursor-mode multi
+'
+```
+
+After small input validation, execute the two distinct studies sequentially:
+
+```bash
+docker compose run --rm -e NVIDIA_DRIVER_CAPABILITIES=all sipros bash -lc '
+  set -e
+  for mode in primary multi; do
+    python3 -B evaluation/scripts/batch_study.py \
+      --id "capacity_5090_${mode}_2m_24m" \
+      --precursor-mode "$mode" \
+      --scans output/evaluation/inputs/ecoli_x1/Pan_062822_X1iso5.FT2 \
+      --fasta raw/Marine_fw_3rev.fasta \
+      --config experiments/Regular.cfg \
+      --gpu-binary "output/evaluation/build/gpu_${mode}/bin/sipros_mvh_cuda" \
+      --batches 2000000 4000000 6000000 8000000 10000000 12000000 \
+                14000000 16000000 18000000 20000000 22000000 24000000 \
+      --backends cuda rt-custom --repeats 1 --warmups 0 \
+      --min-device-free-gib 3 --max-host-rss-gib 55 --failure-policy stop
+  done
+'
+```
+
+There are 24 measured jobs per mode, 48 total if all fit. Any failure stops the
+outer shell too; larger multi-precursor cases are not guaranteed to fit. Each
+mode has its own `progress.md`. Old laptop 12M cancellation remains in force for
+that old study; this example is a separately authorized 5090 capacity study.

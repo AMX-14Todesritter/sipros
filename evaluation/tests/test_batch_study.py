@@ -110,6 +110,21 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaises(SystemExit):study.main(['--id','test','--resume','--min-device-free-gib','0'])
         self.assertFalse((self.out/'results').exists())
 
+    def test_multi_requires_verified_binary(self):
+        with self.assertRaises(SystemExit):study.main(self.args+['--precursor-mode','multi','--dry-run'])
+        self.assertFalse((self.out/'results').exists())
+
+    def test_verified_multi_binary_and_mode_mismatch(self):
+        from inventory import sha
+        build=self.root/'multi_build';(build/'bin').mkdir(parents=True)
+        binary=build/'bin/program';binary.write_text('multi fixture')
+        (build/'build_manifest.json').write_text(json.dumps({'status':'completed','precursor_mode':'multi',
+            'ion_cache':'compiled_off','binary_sha256':sha(binary)}))
+        args=self.args.copy();args[args.index('--gpu-binary')+1]=str(binary)
+        with self.assertRaises(SystemExit):study.main(args+['--dry-run'])
+        self.assertEqual(study.main(args+['--precursor-mode','multi','--dry-run']),0)
+        self.assertEqual(self.manifest()['settings']['precursor_mode'],'multi')
+
     def test_changed_binary_rejected_on_resume(self):
         self.assertEqual(study.main(self.args+['--dry-run']),0)
         (self.root/'binary').write_text('changed')

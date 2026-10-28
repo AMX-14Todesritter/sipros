@@ -41,6 +41,7 @@ def parser():
     p.add_argument('--gpu-binary', type=Path, default=OUT / 'build/gpu/bin/sipros_mvh_cuda')
     p.add_argument('--batches', type=int, nargs='+')
     p.add_argument('--backends', nargs='+', choices=BACKENDS, default=['cuda', 'rt-custom'])
+    p.add_argument('--precursor-mode', choices=['primary', 'multi'], default='primary', help='Multi requires a mode-verified binary from prepare_batch_binary.py')
     p.add_argument('--repeats', type=int, default=1)
     p.add_argument('--warmups', type=int, default=0, help='Excluded processes per cell before its first measured repetition')
     p.add_argument('--order', choices=['ascending', 'round-robin'], default='ascending')
@@ -163,7 +164,7 @@ def report(directory, manifest):
     lines += ['', 'Complete scoring = host packing + GPU service + host restoration; RT setup is already included.',
               'Only validated completed measurements enter the tables; warmups, failed and interrupted attempts are excluded.',
               'GPU memory is sampled device-wide usage, not process-only usage. Resource guards cannot catch every transient allocation.',
-              'The binary determines primary/multi-precursor semantics; this coordinator does not switch the reader or alter algorithms.',
+              'The binary determines precursor semantics; --precursor-mode checks mode metadata and does not rewrite the reader.',
               'Compilation caches are distinct from the disabled theoretical-ion cache. No profiler is attached.',
               'All detailed native logs/configurations/PSMs are retained in the child result directories.',
               'To pause safely, create `PAUSE` here. The current child case finishes before dispatch stops.', '']
@@ -201,7 +202,7 @@ def main(argv=None):
     p = parser(); arguments = sys.argv[1:] if argv is None else argv; a = p.parse_args(arguments)
     if a.resume:
         immutable = {'--scans', '--fasta', '--config', '--gpu-binary', '--batches', '--backends',
-                     '--repeats', '--warmups', '--order', '--failure-policy', '--threads',
+                     '--repeats', '--warmups', '--order', '--failure-policy', '--threads', '--precursor-mode',
                      '--min-device-free-gib', '--max-host-rss-gib'}
         if any(token.split('=')[0] in immutable for token in arguments):
             p.error('Resume uses saved settings; changing experiment options requires a new study ID')
@@ -236,11 +237,19 @@ def execute_study(a, p, directory):
         if min(a.batches) < 1 or len(set(a.batches)) != len(a.batches): p.error('Batch values must be positive and unique')
         if a.repeats < 1 or a.warmups < 0 or a.threads < 1 or min(a.min_device_free_gib, a.max_host_rss_gib) < 0: p.error('Invalid repetition/resource settings')
         if len(set(a.backends)) != len(a.backends): p.error('Duplicate backends')
-        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib')}
+        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib', 'precursor_mode')}
         for k in ('scans', 'fasta', 'config', 'gpu_binary'):
             path = getattr(a, k).resolve()
             if not path.is_file(): p.error('Missing input: ' + str(path))
             s[k] = str(path)
+        mode_path = Path(s['gpu_binary']).parents[1] / 'build_manifest.json'
+        if mode_path.exists():
+            mode = json.loads(mode_path.read_text())
+            if (mode.get('status') != 'completed' or mode.get('precursor_mode') != a.precursor_mode
+                    or mode.get('ion_cache') != 'compiled_off' or mode.get('binary_sha256') != sha(Path(s['gpu_binary']))):
+                p.error('Binary mode/hash/cache metadata mismatch; rebuild or select the correct binary')
+        elif a.precursor_mode == 'multi':
+            p.error('Multi mode requires a verified binary built by prepare_batch_binary.py')
         directory.mkdir(exist_ok=False)
         manifest = {'id': a.id, 'status': 'planned', 'created_utc': utc(), 'settings': s,
                     'fingerprints': fingerprints(s), 'jobs': make_jobs(s)}

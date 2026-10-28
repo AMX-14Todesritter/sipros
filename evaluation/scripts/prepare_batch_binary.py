@@ -1,6 +1,7 @@
 """Build isolated cache-off primary/multi-precursor binaries; never run benchmarks."""
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--precursor-mode', choices=['primary', 'multi'], required=True)
     p.add_argument('--cuda-architectures', default='120')
+    p.add_argument('--build-name', help='Unique directory name under output/evaluation/build')
     p.add_argument('--optix-root', type=Path, default=ROOT / 'build/mvh_rt/optix_sdk')
     p.add_argument('--jobs', type=int, default=4)
     a = p.parse_args()
@@ -42,7 +44,9 @@ def main():
             historical = subprocess.check_output(['git', 'show', '82522a4:mvh_cuda/src/spectrum_input.cpp'], cwd=ROOT, text=True)
         except subprocess.CalledProcessError:
             p.error('Historical reader unavailable; fetch full repository history first (git fetch --unshallow if shallow)')
-    d = OUT / 'build' / ('gpu_' + a.precursor_mode)
+    build_name = a.build_name or ('gpu_' + a.precursor_mode)
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', build_name): p.error('Invalid build name')
+    d = OUT / 'build' / build_name
     if d.exists(): p.error('Build directory already exists; preserve it and choose a clean setup: ' + str(d))
     d.mkdir(parents=True); source = d / 'source'; source.mkdir()
     for name in ('mvh_cuda', 'MVH_RT'):
@@ -52,6 +56,7 @@ def main():
     if historical is not None: reader.write_text(restore_multi(reader.read_text(), historical))
     assert all(sha(ROOT / rel) == sha(source / rel) for rel in PROTECTED)
     m = {'status': 'building', 'precursor_mode': a.precursor_mode, 'ion_cache': 'compiled_off',
+         'build_name': build_name, 'cuda_architectures': a.cuda_architectures,
          'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
          'source_diff': subprocess.check_output(['git', 'diff', 'HEAD', '--', 'mvh_cuda', 'MVH_RT', 'shared'], cwd=ROOT, text=True),
          'reader_commit': '82522a4' if historical is not None else None,

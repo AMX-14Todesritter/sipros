@@ -172,3 +172,15 @@ There are 24 measured jobs per mode, 48 total if all fit. Any failure stops the
 outer shell too; larger multi-precursor cases are not guaranteed to fit. Each
 mode has its own `progress.md`. Old laptop 12M cancellation remains in force for
 that old study; this example is a separately authorized 5090 capacity study.
+
+## Controlled CUDA compilation-target comparison
+
+Use `prepare_batch_binary.py --precursor-mode multi --cuda-architectures 52
+--build-name gpu_multi_sm52` to create a separate build without replacing the
+existing `gpu_multi` architecture-120 build. Check reader, engine and protected
+source hashes match before timing. Architecture 52 is a historical compilation
+control, not a recommended native target for Blackwell. The main CUDA objects
+change compilation target; OptiX shader PTX retains its existing target and is
+compiled by the driver. Hold source, inputs, options, cache policy and event
+boundaries constant. Use distinct study IDs and compare both targets on the same
+GPU before attributing cross-machine speedup changes solely to hardware.

@@ -122,3 +122,10 @@ FASTA comparisons, batch sensitivity, Soil database scaling, profiling and their
 diagnostics. Pan X2/X3 are used only to construct the scan-scaling series together
 with X1. Native Human/Marine/Soil spectra are excluded. Legacy runs and reports
 remain archived; active summaries enforce this scan policy.
+
+## Configurable batch coordinator
+
+Use `evaluation/scripts/batch_study.py` for new configurable batch studies.
+See [BATCH_STUDIES.md](BATCH_STUDIES.md) for the 16M/20M/24M example, live
+`progress.md`, statistics, sampled resource guards, safe pause, and resume.
+Historical fixed-study scripts remain for reproducibility.

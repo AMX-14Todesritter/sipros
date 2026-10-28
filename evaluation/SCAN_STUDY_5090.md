@@ -69,3 +69,11 @@ use a new ID to change them. Failed cases require inspection; do not resume them
 blindly. For manual safe pausing, create PAUSE in the master study directory to
 finish the active child study (up to three backends), or in its active child
 batch-study directory to finish only the current backend before pausing.
+
+## Inspected infrastructure failures
+
+After verifying GPU access in a fresh container, `--resume --retry-failed` on
+`scan_study_5090.py` permits explicit retry of failed child jobs. Completed
+measurements are retained; new attempts use new directories. Do not change
+`run.py`, inputs or binaries merely to recover a container/NVML failure, because
+content fingerprint changes intentionally block reuse of a frozen study.

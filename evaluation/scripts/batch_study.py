@@ -312,7 +312,12 @@ def execute_study(a, p, directory):
                     raise ValueError('Same-backend PSM changed across batches/repetitions')
                 job.update(status='completed', metrics=metrics); print('DONE ' + rid, flush=True)
             except (OSError, ValueError, KeyError) as error:
-                job.update(status='failed', error=str(error)); manifest['error'] = rid + ': ' + str(error)
+                detail = str(error)
+                if not (Path(attempt['result_directory']) / 'manifest.json').exists():
+                    runner_log = directory / (rid + '.log')
+                    tail = '\n'.join(runner_log.read_text(errors='replace').splitlines()[-20:]) if runner_log.exists() else ''
+                    detail = f'Child runner exited {child.returncode} before manifest creation. Runner log: {runner_log}\n{tail}'
+                job.update(status='failed', error=detail); manifest['error'] = rid + ': ' + detail
                 # Methodology violations always stop, regardless of resource-failure policy.
                 violation = any(x in str(error) for x in ('Cache-off', 'counters missing', 'Workload totals', 'PSM changed', 'Diagnostic/'))
                 policy = manifest['settings']['failure_policy']

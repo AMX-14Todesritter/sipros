@@ -72,7 +72,8 @@ def main():
     p.add_argument('--id',required=True); p.add_argument('--hours',type=float,default=6.5)
     p.add_argument('--repeats',type=int,default=3); p.add_argument('--batch',type=int,default=4000000)
     p.add_argument('--backends',nargs='+',choices=['cuda','rt-instanced','rt-custom'],default=['cuda','rt-instanced','rt-custom'])
-    p.add_argument('--resume',action='store_true'); a=p.parse_args()
+    p.add_argument('--resume',action='store_true'); p.add_argument('--retry-failed',action='store_true',help='Explicitly retry inspected failures in new attempt directories'); a=p.parse_args()
+    if a.retry_failed and not a.resume:p.error('--retry-failed requires --resume')
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,45}',a.id):p.error('Invalid study ID')
     if a.hours<=0 or a.repeats<1 or a.batch<1:p.error('Positive hours/repeats/batch required')
     if len(set(a.backends))!=len(a.backends):p.error('Duplicate backends')
@@ -96,7 +97,7 @@ def execute(d,a,p):
         m=json.loads((d/'manifest.json').read_text())
         if fingerprints!=m['fingerprints']:p.error('Inputs or binary changed; use a new ID')
         for j in m['jobs']:
-            if j['status'] in ('running','paused'):j['status']='pending'
+            if j['status'] in ('running','paused') or (a.retry_failed and j['status']=='failed'):j['status']='pending'
         if any(j['status']=='failed' for j in m['jobs']):p.error('Failed child requires inspection before starting a new study')
     else:
         d.mkdir(exist_ok=False)
@@ -130,7 +131,9 @@ def execute(d,a,p):
         childdir=OUT/'batch_studies'/j['id']
         cmd=[sys.executable,'-B',str(ROOT/'evaluation/scripts/batch_study.py'),'--id',j['id'],
              '--stop-at-utc',deadline.isoformat()]
-        if (childdir/'manifest.json').exists():cmd+=['--resume']
+        if (childdir/'manifest.json').exists():
+            cmd+=['--resume']
+            if a.retry_failed:cmd+=['--retry-failed']
         else:cmd+=['--category','scan_scaling','--precursor-mode','multi','--scans',str(inp/f"scans_{j['scans']}.FT2"),
                    '--fasta',str(ROOT/'raw/Marine_fw_3rev.fasta'),'--config',str(ROOT/'experiments/Regular.cfg'),
                    '--gpu-binary',str(binary),'--batches',str(m['batch']),'--backends',*j['backends'],

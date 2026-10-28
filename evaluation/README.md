@@ -129,3 +129,7 @@ Use `evaluation/scripts/batch_study.py` for new configurable batch studies.
 See [BATCH_STUDIES.md](BATCH_STUDIES.md) for the 16M/20M/24M example, live
 `progress.md`, statistics, sampled resource guards, safe pause, and resume.
 Historical fixed-study scripts remain for reproducibility.
+
+For the time-bounded, multi-precursor RTX 5090 scan-scaling task, see
+[SCAN_STUDY_5090.md](SCAN_STUDY_5090.md). It uses the verified sm120 binary,
+fixed batch size, nested X1/X2/X3 samples, and a safe dispatch deadline.

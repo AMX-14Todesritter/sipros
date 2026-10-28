@@ -16,9 +16,9 @@ FAKE = r'''
 import argparse,json,os
 from pathlib import Path
 p=argparse.ArgumentParser()
-for k in ['id','batch','backends']:p.add_argument('--'+k,required=True)
+for k in ['id','batch','backends','category']:p.add_argument('--'+k,required=True)
 a,rest=p.parse_known_args()
-d=Path(os.environ['TEST_OUT'])/'results/batch_size'/a.id;d.mkdir(parents=True,exist_ok=False)
+d=Path(os.environ['TEST_OUT'])/'results'/a.category/a.id;d.mkdir(parents=True,exist_ok=False)
 if os.environ.get('TEST_PAUSE'):
  target=Path(os.environ['TEST_PAUSE']);target.touch()
 fail=str(a.batch)==os.environ.get('FAIL_BATCH')
@@ -124,6 +124,17 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaises(SystemExit):study.main(args+['--dry-run'])
         self.assertEqual(study.main(args+['--precursor-mode','multi','--dry-run']),0)
         self.assertEqual(self.manifest()['settings']['precursor_mode'],'multi')
+
+    def test_deadline_pauses_without_launching(self):
+        self.assertEqual(study.main(self.args+['--stop-at-utc','2000-01-01T00:00:00Z']),0)
+        self.assertEqual(self.manifest()['status'],'paused')
+        self.assertFalse((self.out/'results').exists())
+        self.assertEqual(study.main(['--id','test','--resume']),0)
+
+    def test_scan_scaling_category(self):
+        self.assertEqual(study.main(self.args+['--category','scan_scaling']),0)
+        self.assertTrue((self.out/'results/scan_scaling').is_dir())
+        self.assertFalse((self.out/'results/batch_size').exists())
 
     def test_changed_binary_rejected_on_resume(self):
         self.assertEqual(study.main(self.args+['--dry-run']),0)

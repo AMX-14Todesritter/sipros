@@ -35,6 +35,8 @@ def save(path, data):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--id', required=True, help='Unique study ID; reuse only with --resume')
+    p.add_argument('--category', choices=['batch_size', 'scan_scaling'], default='batch_size')
+    p.add_argument('--stop-at-utc', help='ISO-8601 UTC deadline: finish current child, then pause dispatch')
     p.add_argument('--scans', type=Path)
     p.add_argument('--fasta', type=Path)
     p.add_argument('--config', type=Path, default=ROOT / 'experiments/Regular.cfg')
@@ -177,7 +179,7 @@ def fingerprints(settings):
 
 def child_command(manifest, job, attempt):
     s = manifest['settings']; rid = f"{manifest['id']}_{job['key']}_a{attempt}"
-    cmd = [sys.executable, '-B', str(RUNNER), '--id', rid, '--category', 'batch_size',
+    cmd = [sys.executable, '-B', str(RUNNER), '--id', rid, '--category', s.get('category', 'batch_size'),
            '--scans', s['scans'], '--fasta', s['fasta'], '--config', s['config'],
            '--gpu-binary', s['gpu_binary'], '--batch', str(job['batch']), '--backends', job['backend'],
            '--repeats', '1', '--warmups', str(s['warmups'] if job['repeat'] == 1 else 0),
@@ -192,7 +194,7 @@ def authorize(manifest, job, rid, allowed):
     if not allowed: raise RuntimeError('Legacy pause guard exists. Use --authorize-paused to authorize only this explicit study.')
     n = json.loads(p.read_text()); s = manifest['settings']
     parameters = {k: s[k] for k in ('scans', 'fasta', 'config', 'gpu_binary', 'threads')}
-    parameters.update(category='batch_size', backends=[job['backend']], batch=job['batch'], repeats=1,
+    parameters.update(category=s.get('category', 'batch_size'), backends=[job['backend']], batch=job['batch'], repeats=1,
                       warmups=s['warmups'] if job['repeat'] == 1 else 0)
     n.setdefault('authorized_runs', {})[rid] = {'parameters': parameters, 'request': 'Explicit batch_study invocation', 'study': manifest['id']}
     save(p, n)
@@ -203,10 +205,16 @@ def main(argv=None):
     if a.resume:
         immutable = {'--scans', '--fasta', '--config', '--gpu-binary', '--batches', '--backends',
                      '--repeats', '--warmups', '--order', '--failure-policy', '--threads', '--precursor-mode',
-                     '--min-device-free-gib', '--max-host-rss-gib'}
+                     '--min-device-free-gib', '--max-host-rss-gib', '--category'}
         if any(token.split('=')[0] in immutable for token in arguments):
             p.error('Resume uses saved settings; changing experiment options requires a new study ID')
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', a.id) or a.id in ('.', '..'): p.error('Invalid study ID')
+    if a.stop_at_utc:
+        try:
+            a.deadline = datetime.datetime.fromisoformat(a.stop_at_utc.replace('Z', '+00:00'))
+            if a.deadline.tzinfo is None: raise ValueError('Timezone required')
+        except ValueError: p.error('--stop-at-utc must be an ISO-8601 timestamp with timezone')
+    else: a.deadline = None
     if a.retry_failed and not a.resume: p.error('--retry-failed requires --resume')
     directory = OUT / 'batch_studies' / a.id
     (OUT / 'batch_studies').mkdir(parents=True, exist_ok=True)
@@ -237,7 +245,7 @@ def execute_study(a, p, directory):
         if min(a.batches) < 1 or len(set(a.batches)) != len(a.batches): p.error('Batch values must be positive and unique')
         if a.repeats < 1 or a.warmups < 0 or a.threads < 1 or min(a.min_device_free_gib, a.max_host_rss_gib) < 0: p.error('Invalid repetition/resource settings')
         if len(set(a.backends)) != len(a.backends): p.error('Duplicate backends')
-        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib', 'precursor_mode')}
+        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib', 'precursor_mode', 'category')}
         for k in ('scans', 'fasta', 'config', 'gpu_binary'):
             path = getattr(a, k).resolve()
             if not path.is_file(): p.error('Missing input: ' + str(path))
@@ -269,10 +277,10 @@ def execute_study(a, p, directory):
     for key in ('SIPROS_DIAGNOSTIC_MULTI_PRECURSOR', 'SIPROS_DIAGNOSTIC_HOT_REPLAY', 'SIPROS_CONTINUOUS_REPLAY', 'SIPROS_PEAK_AUDIT_DIR'):
         env.pop(key, None)
     try:
-        manifest.update(status='running', coordinator_pid=os.getpid()); manifest.pop('error', None); checkpoint()
+        manifest.update(status='running', coordinator_pid=os.getpid(), stop_at_utc=a.stop_at_utc); manifest.pop('error', None); checkpoint()
         for job in manifest['jobs']:
             if job['status'] != 'pending': continue
-            if stop_requested or (directory / 'PAUSE').exists():
+            if stop_requested or (directory / 'PAUSE').exists() or (a.deadline and datetime.datetime.now(datetime.timezone.utc) >= a.deadline):
                 manifest['status'] = 'paused'; checkpoint(); return 0
             if any(j['status'] == 'failed' and j['batch'] == job['batch'] and j['backend'] == job['backend'] for j in manifest['jobs']):
                 job.update(status='skipped', reason='Earlier repetition of this cell failed'); checkpoint(); continue
@@ -281,7 +289,7 @@ def execute_study(a, p, directory):
             rid, cmd = child_command(manifest, job, len(job['attempts']) + 1)
             authorize(manifest, job, rid, a.authorize_paused)
             attempt = {'id': rid, 'command': cmd, 'started_utc': utc(),
-                       'result_directory': str(OUT / 'results/batch_size' / rid)}
+                       'result_directory': str(OUT / 'results' / manifest['settings'].get('category', 'batch_size') / rid)}
             job['attempts'].append(attempt); job['status'] = 'running'; checkpoint()
             print('START ' + rid, flush=True)
             with (directory / (rid + '.log')).open('w') as log:

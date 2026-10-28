@@ -47,9 +47,11 @@ def soil(seed):
     finally:mp.write_text(json.dumps(manifest,indent=2))
     print(json.dumps(manifest,indent=2))
 
-def scans(seed):
-    cfg=json.loads((ROOT/'evaluation/configs/workloads.json').read_text());names=['ecoli_x1','ecoli_x2','ecoli_x3'];points=[5000,10000,20000,40000,60000,80000,100000,120000,140297]
-    sources={k:ROOT/cfg['workloads'][k]['ft2'] for k in names}
+def scans(seed,points=None,source_paths=None):
+    cfg=json.loads((ROOT/'evaluation/configs/workloads.json').read_text());names=['ecoli_x1','ecoli_x2','ecoli_x3']
+    points=sorted(points if points is not None else [5000,10000,20000,40000,60000,80000,100000,120000,140297])
+    if not points or points[0]<1 or len(points)!=len(set(points)):raise ValueError('Scan points must be positive and unique')
+    sources={k:Path(v).resolve() for k,v in zip(names,source_paths)} if source_paths else {k:ROOT/cfg['workloads'][k]['ft2'] for k in names}
     for p in sources.values():
         if not p.is_file():raise ValueError('Missing '+str(p))
     dest=OUT/'inputs'/f'scan_scaling_seed{seed}';dest.mkdir(parents=True,exist_ok=False)
@@ -67,7 +69,8 @@ def scans(seed):
             seen.add(sid);indices.append((score(seed,name+':'+sid),i))
         counts[name]=len(indices);rankings[name]=[i for _,i in sorted(indices)];source_hashes[name]=sha(path)
         if counts[name]!=cfg['workloads'][name]['expected_scans']:raise ValueError('Unexpected source scan count')
-    total=sum(counts.values());assert total==points[-1]
+    total=sum(counts.values())
+    if points[-1]>total:raise ValueError('Requested more scans than available')
     selected={};quotas={};last={k:0 for k in names}
     for n in points:
         q={k:n*counts[k]//total for k in names}
@@ -106,6 +109,6 @@ def scans(seed):
     finally:mp.write_text(json.dumps(manifest,indent=2))
     print('Prepared '+str(dest),flush=True)
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('kind',choices=['soil','scans']);p.add_argument('--seed',type=int,default=20261026);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('kind',choices=['soil','scans']);p.add_argument('--seed',type=int,default=20261026);p.add_argument('--points',type=int,nargs='+');p.add_argument('--sources',type=Path,nargs=3,metavar=('X1','X2','X3'));a=p.parse_args()
     if a.kind=='soil':soil(a.seed)
-    else:scans(a.seed)
+    else:scans(a.seed,a.points,a.sources)

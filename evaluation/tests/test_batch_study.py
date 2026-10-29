@@ -136,6 +136,10 @@ class CoordinatorTests(unittest.TestCase):
         self.assertTrue((self.out/'results/scan_scaling').is_dir())
         self.assertFalse((self.out/'results/batch_size').exists())
 
+    def test_database_scaling_category(self):
+        self.assertEqual(study.main(self.args+['--category','database_scaling']),0)
+        self.assertTrue((self.out/'results/database_scaling').is_dir())
+
     def test_changed_binary_rejected_on_resume(self):
         self.assertEqual(study.main(self.args+['--dry-run']),0)
         (self.root/'binary').write_text('changed')

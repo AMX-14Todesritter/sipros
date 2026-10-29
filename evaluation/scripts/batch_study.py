@@ -35,7 +35,7 @@ def save(path, data):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--id', required=True, help='Unique study ID; reuse only with --resume')
-    p.add_argument('--category', choices=['batch_size', 'scan_scaling'], default='batch_size')
+    p.add_argument('--category', choices=['batch_size', 'scan_scaling', 'database_scaling'], default='batch_size')
     p.add_argument('--stop-at-utc', help='ISO-8601 UTC deadline: finish current child, then pause dispatch')
     p.add_argument('--scans', type=Path)
     p.add_argument('--fasta', type=Path)

@@ -7,11 +7,11 @@ R=Path(__file__).resolve().parents[2];E=R/'output/evaluation';D=E/'scan_scaling_
 def save(p,m):
  t=p.with_suffix(p.suffix+'.tmp');t.write_text(json.dumps(m,indent=2));t.replace(p)
 def report(m):
- lines=['# Marine nested scan scaling','',f"Status: {m['status']}; selected batch: {m.get('selected_batch','capacity check pending')}",'','Multi-hypothesis; theory cache off; CUDA and RT-custom; four complete searches per cell; capacity checks count when successful. All timings are unprofiled. Memory is sampled device-wide, including desktop.','']
+ lines=['# Marine nested scan scaling','',f"Status: {m['status']}; selected batch: {m.get('selected_batch','capacity check pending')}",'','Multi-hypothesis; theory cache off; CUDA and RT-custom; three complete searches per cell; capacity checks count when successful. All timings are unprofiled. Memory is sampled device-wide, including desktop.','']
  lines+=['|Sample|Backend|Completed|Fused median (s)|Complete scoring median (s)|Search median (s)|GPU peak maximum (GiB)|','|---|---|---:|---:|---:|---:|---:|']
  rows=[]
  for sample in ('S1','S2','S3'):
-  for backend in ('cuda','rt-instanced','rt-custom'):
+  for backend in ('cuda','rt-custom'):
    js=[j for j in m['jobs'] if j['sample']==sample and j['backend']==backend and j['status']=='completed' and j['batch']==m.get('selected_batch')]
    row={'sample':sample,'backend':backend,'completed':len(js)}
    for key in ('fused_seconds','complete_scoring_seconds','search_seconds','device_peak_bytes','host_peak_bytes'):
@@ -19,7 +19,7 @@ def report(m):
     if vs:row.update({key+'_median':statistics.median(vs),key+'_mean':statistics.mean(vs),key+'_min':min(vs),key+'_max':max(vs),key+'_stdev':statistics.stdev(vs) if len(vs)>1 else 0})
    rows.append(row)
    val=lambda k:f"{row[k]:.3f}" if k in row else '—'
-   lines.append(f"|{sample}|{backend}|{len(js)}/4|{val('fused_seconds_median')}|{val('complete_scoring_seconds_median')}|{val('search_seconds_median')}|{max([j['metrics']['device_peak_bytes']/2**30 for j in js],default=0):.2f}|")
+   lines.append(f"|{sample}|{backend}|{len(js)}/3|{val('fused_seconds_median')}|{val('complete_scoring_seconds_median')}|{val('search_seconds_median')}|{max([j['metrics']['device_peak_bytes']/2**30 for j in js],default=0):.2f}|")
  (D/'progress.md').write_text('\n'.join(lines)+'\n')
  with (D/'summary.csv').open('w') as f:
   w=csv.DictWriter(f,fieldnames=list(dict.fromkeys(k for r in rows for k in r)));w.writeheader();w.writerows(rows)
@@ -31,13 +31,13 @@ def prepare():
  assert sha(binary)==baseline['binary_sha256']
  assert sha(Path(original['database']))==original['database_sha256']
  for sample in original['samples'].values():assert sha(Path(sample['path']))==sample['sha256']
- m={'status':'ready','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=R,text=True).strip(),'binary':str(binary),'binary_sha256':sha(binary),'precursor':'multi-hypothesis','ion_cache':'compiled_off','database':original['database'],'database_sha256':original['database_sha256'],'samples':original['samples'],'sources':original['sources'],'jobs':[],'selected_batch':4000000,'repeats':4,'capacity_reserve_gib':1.5,'host_rss_guard_gib':16,'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ m={'status':'ready','source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=R,text=True).strip(),'binary':str(binary),'binary_sha256':sha(binary),'precursor':'multi-hypothesis','ion_cache':'compiled_off','database':original['database'],'database_sha256':original['database_sha256'],'samples':original['samples'],'sources':original['sources'],'jobs':[],'selected_batch':4000000,'repeats':3,'capacity_reserve_gib':1.5,'host_rss_guard_gib':16,'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
  save(MP,m);return m
 def measure(m,sample,backend,batch,repeat,phase):
  rid=f'marine_nested_{sample}_multi_nocache_b{batch}_{backend}_r{repeat}'
  scans=Path(m['samples'][sample]['path']);binary=Path(m['binary']);config=R/'experiments/Regular.cfg'
  parameters={'category':'scan_scaling','scans':str(scans),'fasta':m['database'],'config':str(config),'gpu_binary':str(binary),'backends':[backend],'batch':batch,'repeats':1,'warmups':0,'threads':1}
- pause=E/'manifests/LARGE_BENCHMARKS_PAUSED.json';paused=json.loads(pause.read_text());paused.setdefault('authorized_runs',{})[rid]={'parameters':parameters,'study':str(MP),'request':'User authorizes nested X1/X2/X3 Marine study, S3 capacity first, four repetitions, CUDA, RT-instanced and RT-custom'};save(pause,paused)
+ pause=E/'manifests/LARGE_BENCHMARKS_PAUSED.json';paused=json.loads(pause.read_text());paused.setdefault('authorized_runs',{})[rid]={'parameters':parameters,'study':str(MP),'request':'User authorizes nested X1/X2/X3 Marine study, S3 capacity first, three repetitions, CUDA and RT-custom'};save(pause,paused)
  cmd=[sys.executable,'-B',str(R/'evaluation/scripts/run.py'),'--id',rid,'--category','scan_scaling','--scans',str(scans),'--fasta',m['database'],'--config',str(config),'--backends',backend,'--batch',str(batch),'--repeats','1','--warmups','0','--threads','1','--gpu-binary',str(binary),'--min-device-free-gib','1.5','--max-host-rss-gib','16']
  j={'id':rid,'sample':sample,'backend':backend,'batch':batch,'repeat':repeat,'phase':phase,'status':'running','command':cmd};m['jobs'].append(j);save(MP,m);report(m);print('START',rid,flush=True)
  with (D/(rid+'.log')).open('w') as log:p=subprocess.run(cmd,cwd=R,stdout=log,stderr=subprocess.STDOUT)
@@ -59,12 +59,12 @@ def main():
  m=prepare();disabled=set()
  try:
   m['status']='capacity_check';save(MP,m);report(m)
-  for backend in ('cuda','rt-instanced','rt-custom'):
+  for backend in ('cuda','rt-custom'):
    if not measure(m,'S3',backend,4000000,1,'capacity'):disabled.add(('S3',backend))
   m['status']='running';save(MP,m);report(m)
-  for repeat in range(1,5):
+  for repeat in range(1,4):
    order=['S1','S2','S3'];shift=(repeat-1)%3;order=order[shift:]+order[:shift]
-   backends=['cuda','rt-instanced','rt-custom'];shift=(repeat-1)%3;backends=backends[shift:]+backends[:shift]
+   backends=['cuda','rt-custom'];shift=(repeat-1)%2;backends=backends[shift:]+backends[:shift]
    for sample in order:
     for backend in backends:
      if repeat==1 and sample=='S3':continue

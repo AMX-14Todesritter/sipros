@@ -1,12 +1,24 @@
 """Serial reproducible fused-scoring runs. Execute inside project container."""
 import argparse, csv, ctypes, datetime, fcntl, hashlib, itertools, json, os
 from pathlib import Path
-import re, signal, statistics, subprocess, time
+import re, signal, statistics, subprocess, time, shutil
 from inventory import ROOT, OUT, sha
 BACKENDS=['cpu','cuda','rt-instanced','rt-custom']
 
 def save(path,data):
     tmp=path.with_suffix(path.suffix+'.tmp');tmp.write_text(json.dumps(data,indent=2));tmp.replace(path)
+
+def share_psm(path, digest):
+    # Immutable exports across child processes/studies share one physical file.
+    store=OUT/'artifacts/psm';store.mkdir(parents=True,exist_ok=True)
+    canonical=store/(digest+'.tsv')
+    if not canonical.exists():os.link(path,canonical)
+    else:
+        if sha(canonical)!=digest:raise RuntimeError('PSM content store hash mismatch')
+        if path.stat().st_ino!=canonical.stat().st_ino:
+            temp=path.with_name(path.name+'.shared.tmp')
+            os.link(canonical,temp);os.replace(temp,path)
+    return canonical
 
 def fields(line):return dict(re.findall(r'(\w+)=([^\s]+)',line))
 
@@ -166,6 +178,8 @@ def main():
                         cmd+=['--match-backend',backend,'--peptide-batch-size',str(a.batch),'--peptide-generation','cuda','--result-restoration','final','--spectrum-cache','host']
                         if a.verify:cmd+=['--verify-cuda']
                         if a.score_impact and backend!='cuda':cmd+=['--score-impact']
+                    if shutil.disk_usage(OUT).free < 10*2**30:
+                        raise RuntimeError('Output disk free space below 10 GiB; no further measurement started')
                     item={'name':name,'backend':backend,'warmup':warm,'repeat':rep if not warm else None,'command':cmd,'status':'running'}
                     manifest['runs'].append(item);save(mp,manifest);print('START '+name,flush=True)
                     before=gpu.read();peak=before;rss=0;hwm=0;start=time.perf_counter()
@@ -207,12 +221,7 @@ def main():
                         save(mp,manifest)
                         raise RuntimeError(item['error'])
                     item['psm_sha256']=sha(directory/'mvh_psms.tsv');item['status']='completed'
-                    # Identical immutable exports share disk blocks via hard links; every run retains its own path.
-                    prior=next((r for r in manifest['runs'][:-1] if r.get('status')=='completed' and r.get('psm_sha256')==item['psm_sha256']),None)
-                    if prior:
-                        current=directory/'mvh_psms.tsv';link=directory/'mvh_psms.shared.tmp'
-                        os.link(dest/prior['name']/'mvh_psms.tsv',link);link.replace(current)
-                        item['psm_shared_with']=prior['name']
+                    item['psm_content_store']=str(share_psm(directory/'mvh_psms.tsv',item['psm_sha256']))
                     save(mp,manifest);print('DONE '+name+' '+str(round(item['wall_seconds'],3))+'s',flush=True)
             measured=[r for r in manifest['runs'] if not r['warmup'] and r['status']=='completed']
             manifest['statistics']={}

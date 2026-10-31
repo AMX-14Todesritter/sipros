@@ -27,7 +27,7 @@ r={'name':a.backends+'_r1','backend':a.backends,'status':'completed','warmup':Fa
 'rt_setup_seconds':.1,'totals':{'fused_device_seconds':1.,'pack_seconds':2.,'gpu_service_seconds':3.,'replay_verify_seconds':4.,'candidates':10},
 'summary':{'search_seconds':'12'},'wall_seconds':13.,'generated_peptides':20,
 'device_peak_bytes':100,'host_observed_hwm_bytes':200,'psm_sha256':a.backends}
-n={'status':'failed' if fail else 'completed','error':'Synthetic capacity failure' if fail else '', 'diagnostic':False,'runs':[r]}
+n={'status':'failed' if fail else 'completed','error':os.environ.get('FAIL_ERROR','Synthetic capacity failure') if fail else '', 'diagnostic':False,'runs':[r]}
 (d/'manifest.json').write_text(json.dumps(n))
 raise SystemExit(1 if fail else 0)
 '''
@@ -75,6 +75,18 @@ class CoordinatorTests(unittest.TestCase):
     def test_capacity_failure_skips_all_larger(self):
         with patch.dict(os.environ,{'FAIL_BATCH':'20'}):self.assertEqual(study.main(self.args+['--failure-policy','skip-larger']),1)
         self.assertEqual([j['status'] for j in self.manifest()['jobs']],['completed','completed','failed','skipped','skipped','skipped'])
+
+    def test_backend_oom_skips_only_that_backend(self):
+        with patch.dict(os.environ, {'FAIL_BATCH':'20', 'FAIL_ERROR':'CUDA out of memory'}):
+            self.assertEqual(study.main(self.args+['--repeats','2','--failure-policy','continue',
+                                                  '--oom-skip-backends','rt-custom']),1)
+        jobs=self.manifest()['jobs']
+        self.assertTrue(all(j['status']=='skipped' for j in jobs
+                            if j['backend']=='rt-custom' and j['batch']==24))
+        self.assertTrue(all(j['status']=='completed' for j in jobs
+                            if j['backend']=='cuda' and j['batch']==24))
+        self.assertTrue(all(j['status']=='skipped' for j in jobs
+                            if j['backend']=='rt-custom' and j['batch']==20 and j['repeat']==2))
 
     def test_cache_violation_always_stops(self):
         with patch.dict(os.environ,{'BAD_CACHE':'1'}):self.assertEqual(study.main(self.args+['--failure-policy','continue']),1)

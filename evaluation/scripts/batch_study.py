@@ -47,6 +47,8 @@ def parser():
     p.add_argument('--repeats', type=int, default=1)
     p.add_argument('--warmups', type=int, default=0, help='Excluded processes per cell before its first measured repetition')
     p.add_argument('--order', choices=['ascending', 'round-robin'], default='ascending')
+    p.add_argument('--oom-skip-backends', nargs='+', choices=BACKENDS, default=[],
+                   help='On GPU OOM/device-memory guard, skip only this backend at the same or larger batches')
     p.add_argument('--failure-policy', choices=['stop', 'continue', 'skip-larger'], default='stop',
                    help='stop: preserve pending jobs; continue: skip failed cell; skip-larger: cancel this and larger batches')
     p.add_argument('--min-device-free-gib', type=float, default=3)
@@ -245,7 +247,7 @@ def execute_study(a, p, directory):
         if min(a.batches) < 1 or len(set(a.batches)) != len(a.batches): p.error('Batch values must be positive and unique')
         if a.repeats < 1 or a.warmups < 0 or a.threads < 1 or min(a.min_device_free_gib, a.max_host_rss_gib) < 0: p.error('Invalid repetition/resource settings')
         if len(set(a.backends)) != len(a.backends): p.error('Duplicate backends')
-        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib', 'precursor_mode', 'category')}
+        s = {k: getattr(a, k) for k in ('batches', 'backends', 'repeats', 'warmups', 'order', 'failure_policy', 'threads', 'min_device_free_gib', 'max_host_rss_gib', 'precursor_mode', 'category', 'oom_skip_backends')}
         for k in ('scans', 'fasta', 'config', 'gpu_binary'):
             path = getattr(a, k).resolve()
             if not path.is_file(): p.error('Missing input: ' + str(path))
@@ -299,6 +301,7 @@ def execute_study(a, p, directory):
                     try: child.wait(timeout=5)
                     except subprocess.TimeoutExpired: checkpoint()
             attempt.update(exit_code=child.returncode, finished_utc=utc())
+            n = {}
             try:
                 n = json.loads((Path(attempt['result_directory']) / 'manifest.json').read_text())
                 if child.returncode or n['status'] != 'completed': raise ValueError(n.get('error', 'Child case failed; inspect logs'))
@@ -321,6 +324,19 @@ def execute_study(a, p, directory):
                 # Methodology violations always stop, regardless of resource-failure policy.
                 violation = any(x in str(error) for x in ('Cache-off', 'counters missing', 'Workload totals', 'PSM changed', 'Diagnostic/'))
                 policy = manifest['settings']['failure_policy']
+                evidence = detail + '\n' + json.dumps(n)
+                result_dir = Path(attempt['result_directory'])
+                for native_log in result_dir.glob('*.log'):
+                    evidence += '\n' + native_log.read_text(errors='replace')
+                gpu_capacity = any(token in evidence.lower() for token in (
+                    'out of memory', 'cudaerrormemoryallocation', 'cuda_error_out_of_memory',
+                    'optix_error_memory_allocation_failed', 'device free memory below configured'))
+                if (not violation and gpu_capacity and
+                        job['backend'] in manifest['settings'].get('oom_skip_backends', [])):
+                    for pending in manifest['jobs']:
+                        if (pending['status'] == 'pending' and pending['backend'] == job['backend']
+                                and pending['batch'] >= job['batch']):
+                            pending.update(status='skipped', reason='GPU capacity failure for ' + job['backend'] + ' at batch ' + str(job['batch']))
                 if policy == 'skip-larger' and not violation:
                     for pending in manifest['jobs']:
                         if pending['status'] == 'pending' and pending['batch'] >= job['batch']:
